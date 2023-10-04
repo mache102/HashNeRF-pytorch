@@ -1,63 +1,157 @@
-import os, sys
-from datetime import datetime
-import numpy as np
+import configargparse
 import imageio
-import json
+import matplotlib.pyplot as plt
+import numpy as np
+import os
 import pdb
-import random
+import pickle
 import time
+
+from tqdm import tqdm, trange
+
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
-from tqdm import tqdm, trange
-import pickle
-
-import matplotlib.pyplot as plt
 
 from run_nerf_helpers import *
-from optimizer import MultiOptimizer
-from radam import RAdam
+from ray_util import *
 from loss import sigma_sparsity_loss, total_variation_loss
 
-from load_llff import load_llff_data
-from load_deepvoxels import load_dv_data
-from load_blender import load_blender_data
-from load_scannet import load_scannet_data
-from load_LINEMOD import load_LINEMOD_data
+from load.load_llff import load_llff_data
+from load.load_deepvoxels import load_dv_data
+from load.load_blender import load_blender_data
+from load.load_scannet import load_scannet_data
+from load.load_LINEMOD import load_LINEMOD_data
 
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
 DEBUG = False
 
+def config_parser():
 
-def batchify(fn, chunk):
-    """Constructs a version of 'fn' that applies to smaller batches.
-    """
-    if chunk is None:
-        return fn
-    def ret(inputs):
-        return torch.cat([fn(inputs[i:i+chunk]) for i in range(0, inputs.shape[0], chunk)], 0)
-    return ret
+    parser = configargparse.ArgumentParser()
+    parser.add_argument('--config', is_config_file=True,
+                        help='config file path')
+    parser.add_argument("--expname", type=str,
+                        help='experiment name')
+    parser.add_argument("--basedir", type=str, default='./logs/',
+                        help='where to store ckpts and logs')
+    parser.add_argument("--datadir", type=str, default='./data/llff/fern',
+                        help='input data directory')
 
+    # training options
+    parser.add_argument("--netdepth", type=int, default=8,
+                        help='layers in network')
+    parser.add_argument("--netwidth", type=int, default=256,
+                        help='channels per layer')
+    parser.add_argument("--netdepth_fine", type=int, default=8,
+                        help='layers in fine network')
+    parser.add_argument("--netwidth_fine", type=int, default=256,
+                        help='channels per layer in fine network')
+    parser.add_argument("--N_rand", type=int, default=32*32*4,
+                        help='batch size (number of random rays per gradient step)')
+    parser.add_argument("--lrate", type=float, default=5e-4,
+                        help='learning rate')
+    parser.add_argument("--lrate_decay", type=int, default=250,
+                        help='exponential learning rate decay (in 1000 steps)')
+    parser.add_argument("--chunk", type=int, default=1024*32,
+                        help='number of rays processed in parallel, decrease if running out of memory')
+    parser.add_argument("--netchunk", type=int, default=1024*64,
+                        help='number of pts sent through network in parallel, decrease if running out of memory')
+    parser.add_argument("--no_batching", action='store_true',
+                        help='only take random rays from 1 image at a time')
+    parser.add_argument("--no_reload", action='store_true',
+                        help='do not reload weights from saved ckpt')
+    parser.add_argument("--ft_path", type=str, default=None,
+                        help='specific weights npy file to reload for coarse network')
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
-    """Prepares inputs and applies network 'fn'.
-    """
-    inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    embedded, keep_mask = embed_fn(inputs_flat)
+    # rendering options
+    parser.add_argument("--N_samples", type=int, default=64,
+                        help='number of coarse samples per ray')
+    parser.add_argument("--N_importance", type=int, default=0,
+                        help='number of additional fine samples per ray')
+    parser.add_argument("--perturb", type=float, default=1.,
+                        help='set to 0. for no jitter, 1. for jitter')
+    parser.add_argument("--use_viewdirs", action='store_true',
+                        help='use full 5D input instead of 3D')
+    parser.add_argument("--i_embed", type=int, default=1,
+                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
+    parser.add_argument("--i_embed_views", type=int, default=2,
+                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
+    parser.add_argument("--multires", type=int, default=10,
+                        help='log2 of max freq for positional encoding (3D location)')
+    parser.add_argument("--multires_views", type=int, default=4,
+                        help='log2 of max freq for positional encoding (2D direction)')
+    parser.add_argument("--raw_noise_std", type=float, default=0.,
+                        help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
 
-    if viewdirs is not None:
-        input_dirs = viewdirs[:,None].expand(inputs.shape)
-        input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
-        embedded_dirs = embeddirs_fn(input_dirs_flat)
-        embedded = torch.cat([embedded, embedded_dirs], -1)
+    parser.add_argument("--render_only", action='store_true',
+                        help='do not optimize, reload weights and render out render_poses path')
+    parser.add_argument("--render_test", action='store_true',
+                        help='render the test set instead of render_poses path')
+    parser.add_argument("--render_factor", type=int, default=0,
+                        help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
 
-    outputs_flat = batchify(fn, netchunk)(embedded)
-    outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
-    outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
-    return outputs
+    # training options
+    parser.add_argument("--precrop_iters", type=int, default=0,
+                        help='number of steps to train on central crops')
+    parser.add_argument("--precrop_frac", type=float,
+                        default=.5, help='fraction of img taken for central crops')
+
+    # dataset options
+    parser.add_argument("--dataset_type", type=str, default='llff',
+                        help='options: llff / blender / deepvoxels')
+    parser.add_argument("--testskip", type=int, default=8,
+                        help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
+
+    ## deepvoxels flags
+    parser.add_argument("--shape", type=str, default='greek',
+                        help='options : armchair / cube / greek / vase')
+
+    ## blender flags
+    parser.add_argument("--white_bkgd", action='store_true',
+                        help='set to render synthetic data on a white bkgd (always use for dvoxels)')
+    parser.add_argument("--half_res", action='store_true',
+                        help='load blender synthetic data at 400x400 instead of 800x800')
+
+    ## scannet flags
+    parser.add_argument("--scannet_sceneID", type=str, default='scene0000_00',
+                        help='sceneID to load from scannet')
+
+    ## llff flags
+    parser.add_argument("--factor", type=int, default=8,
+                        help='downsample factor for LLFF images')
+    parser.add_argument("--no_ndc", action='store_true',
+                        help='do not use normalized device coordinates (set for non-forward facing scenes)')
+    parser.add_argument("--lindisp", action='store_true',
+                        help='sampling linearly in disparity rather than depth')
+    parser.add_argument("--spherify", action='store_true',
+                        help='set for spherical 360 scenes')
+    parser.add_argument("--llffhold", type=int, default=8,
+                        help='will take every 1/N images as LLFF test set, paper uses 8')
+
+    # logging/saving options
+    parser.add_argument("--i_print",   type=int, default=100,
+                        help='frequency of console printout and metric loggin')
+    parser.add_argument("--i_img",     type=int, default=500,
+                        help='frequency of tensorboard image logging')
+    parser.add_argument("--i_weights", type=int, default=10000,
+                        help='frequency of weight ckpt saving')
+    parser.add_argument("--i_testset", type=int, default=1000,
+                        help='frequency of testset saving')
+    parser.add_argument("--i_video",   type=int, default=5000,
+                        help='frequency of render_poses video saving')
+
+    parser.add_argument("--finest_res",   type=int, default=512,
+                        help='finest resolultion for hashed embedding')
+    parser.add_argument("--log2_hashmap_size",   type=int, default=19,
+                        help='log2 of hashmap size')
+    parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
+                        help='learning rate')
+    parser.add_argument("--tv-loss-weight", type=float, default=1e-6,
+                        help='learning rate')
+
+    return parser
+
 
 
 def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
@@ -120,7 +214,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     sh = rays_d.shape # [..., 3]
     if ndc:
         # for forward facing scenes
-        rays_o, rays_d = ndc_rays(H, W, K[0][0], 1., rays_o, rays_d)
+        rays_o, rays_d = get_ndc_rays(H, W, K[0][0], 1., rays_o, rays_d)
 
     # Create ray batch
     rays_o = torch.reshape(rays_o, [-1,3]).float()
@@ -144,7 +238,10 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
 
 
 def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
-
+    """
+    Rendering for test set
+    
+    """
     H, W, focal = hwf
     near, far = render_kwargs['near'], render_kwargs['far']
 
@@ -206,122 +303,6 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     return rgbs, depths
 
-
-def create_nerf(args):
-    """Instantiate NeRF's MLP model.
-    """
-    embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
-    if args.i_embed==1:
-        # hashed embedding table
-        embedding_params = list(embed_fn.parameters())
-
-    input_ch_views = 0
-    embeddirs_fn = None
-    if args.use_viewdirs:
-        # if using hashed for xyz, use SH for views
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args, i=args.i_embed_views)
-
-    output_ch = 5 if args.N_importance > 0 else 4
-    skips = [4]
-
-    if args.i_embed==1:
-        model = NeRFSmall(num_layers=2,
-                        hidden_dim=64,
-                        geo_feat_dim=15,
-                        num_layers_color=3,
-                        hidden_dim_color=64,
-                        input_ch=input_ch, input_ch_views=input_ch_views).to(device)
-    else:
-        model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
-    grad_vars = list(model.parameters())
-
-    model_fine = None
-
-    if args.N_importance > 0:
-        if args.i_embed==1:
-            model_fine = NeRFSmall(num_layers=2,
-                        hidden_dim=64,
-                        geo_feat_dim=15,
-                        num_layers_color=3,
-                        hidden_dim_color=64,
-                        input_ch=input_ch, input_ch_views=input_ch_views).to(device)
-        else:
-            model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                          input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
-        grad_vars += list(model_fine.parameters())
-
-    network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
-                                                                embed_fn=embed_fn,
-                                                                embeddirs_fn=embeddirs_fn,
-                                                                netchunk=args.netchunk)
-
-    # Create optimizer
-    if args.i_embed==1:
-        optimizer = RAdam([
-                            {'params': grad_vars, 'weight_decay': 1e-6},
-                            {'params': embedding_params, 'eps': 1e-15}
-                        ], lr=args.lrate, betas=(0.9, 0.99))
-    else:
-        optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
-
-    start = 0
-    basedir = args.basedir
-    expname = args.expname
-
-    ##########################
-
-    # Load checkpoints
-    if args.ft_path is not None and args.ft_path!='None':
-        ckpts = [args.ft_path]
-    else:
-        ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
-
-    print('Found ckpts', ckpts)
-    if len(ckpts) > 0 and not args.no_reload:
-        ckpt_path = ckpts[-1]
-        print('Reloading from', ckpt_path)
-        ckpt = torch.load(ckpt_path)
-
-        start = ckpt['global_step']
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-
-        # Load model
-        model.load_state_dict(ckpt['network_fn_state_dict'])
-        if model_fine is not None:
-            model_fine.load_state_dict(ckpt['network_fine_state_dict'])
-        if args.i_embed==1:
-            embed_fn.load_state_dict(ckpt['embed_fn_state_dict'])
-
-    ##########################
-    # pdb.set_trace()
-
-    render_kwargs_train = {
-        'network_query_fn' : network_query_fn,
-        'perturb' : args.perturb,
-        'N_importance' : args.N_importance,
-        'network_fine' : model_fine,
-        'N_samples' : args.N_samples,
-        'network_fn' : model,
-        'embed_fn': embed_fn,
-        'use_viewdirs' : args.use_viewdirs,
-        'white_bkgd' : args.white_bkgd,
-        'raw_noise_std' : args.raw_noise_std,
-    }
-
-    # NDC only good for LLFF-style forward facing data
-    if args.dataset_type != 'llff' or args.no_ndc:
-        print('Not ndc!')
-        render_kwargs_train['ndc'] = False
-        render_kwargs_train['lindisp'] = args.lindisp
-
-    render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
-    render_kwargs_test['perturb'] = False
-    render_kwargs_test['raw_noise_std'] = 0.
-
-    return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
 def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
@@ -491,140 +472,26 @@ def render_rays(ray_batch,
     return ret
 
 
-def config_parser():
+def main():
 
-    import configargparse
-    parser = configargparse.ArgumentParser()
-    parser.add_argument('--config', is_config_file=True,
-                        help='config file path')
-    parser.add_argument("--expname", type=str,
-                        help='experiment name')
-    parser.add_argument("--basedir", type=str, default='./logs/',
-                        help='where to store ckpts and logs')
-    parser.add_argument("--datadir", type=str, default='./data/llff/fern',
-                        help='input data directory')
+    """
+    Load data
 
-    # training options
-    parser.add_argument("--netdepth", type=int, default=8,
-                        help='layers in network')
-    parser.add_argument("--netwidth", type=int, default=256,
-                        help='channels per layer')
-    parser.add_argument("--netdepth_fine", type=int, default=8,
-                        help='layers in fine network')
-    parser.add_argument("--netwidth_fine", type=int, default=256,
-                        help='channels per layer in fine network')
-    parser.add_argument("--N_rand", type=int, default=32*32*4,
-                        help='batch size (number of random rays per gradient step)')
-    parser.add_argument("--lrate", type=float, default=5e-4,
-                        help='learning rate')
-    parser.add_argument("--lrate_decay", type=int, default=250,
-                        help='exponential learning rate decay (in 1000 steps)')
-    parser.add_argument("--chunk", type=int, default=1024*32,
-                        help='number of rays processed in parallel, decrease if running out of memory')
-    parser.add_argument("--netchunk", type=int, default=1024*64,
-                        help='number of pts sent through network in parallel, decrease if running out of memory')
-    parser.add_argument("--no_batching", action='store_true',
-                        help='only take random rays from 1 image at a time')
-    parser.add_argument("--no_reload", action='store_true',
-                        help='do not reload weights from saved ckpt')
-    parser.add_argument("--ft_path", type=str, default=None,
-                        help='specific weights npy file to reload for coarse network')
+    Supported types:
+    - blender
+    - llff
+    - scannet
+    - deepvoxels
+    - LINEMOD
 
-    # rendering options
-    parser.add_argument("--N_samples", type=int, default=64,
-                        help='number of coarse samples per ray')
-    parser.add_argument("--N_importance", type=int, default=0,
-                        help='number of additional fine samples per ray')
-    parser.add_argument("--perturb", type=float, default=1.,
-                        help='set to 0. for no jitter, 1. for jitter')
-    parser.add_argument("--use_viewdirs", action='store_true',
-                        help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=int, default=1,
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
-    parser.add_argument("--i_embed_views", type=int, default=2,
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
-    parser.add_argument("--multires", type=int, default=10,
-                        help='log2 of max freq for positional encoding (3D location)')
-    parser.add_argument("--multires_views", type=int, default=4,
-                        help='log2 of max freq for positional encoding (2D direction)')
-    parser.add_argument("--raw_noise_std", type=float, default=0.,
-                        help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
+    images (samples, H, W, 4) # rgba
+    poses (samples, 4, 4) # frame transformation matrix 
+    render_poses (41, 4, 4) # full 360 poses 
+    hwf (3, ) # height, width, focal = .5 * W / np.tan(.5 * camera_angle_x) 
+    i_split (3, None) # imgs indices for train, val, test 
+    bounding_box (2, 3) # pair of 3d coords
 
-    parser.add_argument("--render_only", action='store_true',
-                        help='do not optimize, reload weights and render out render_poses path')
-    parser.add_argument("--render_test", action='store_true',
-                        help='render the test set instead of render_poses path')
-    parser.add_argument("--render_factor", type=int, default=0,
-                        help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
-
-    # training options
-    parser.add_argument("--precrop_iters", type=int, default=0,
-                        help='number of steps to train on central crops')
-    parser.add_argument("--precrop_frac", type=float,
-                        default=.5, help='fraction of img taken for central crops')
-
-    # dataset options
-    parser.add_argument("--dataset_type", type=str, default='llff',
-                        help='options: llff / blender / deepvoxels')
-    parser.add_argument("--testskip", type=int, default=8,
-                        help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
-
-    ## deepvoxels flags
-    parser.add_argument("--shape", type=str, default='greek',
-                        help='options : armchair / cube / greek / vase')
-
-    ## blender flags
-    parser.add_argument("--white_bkgd", action='store_true',
-                        help='set to render synthetic data on a white bkgd (always use for dvoxels)')
-    parser.add_argument("--half_res", action='store_true',
-                        help='load blender synthetic data at 400x400 instead of 800x800')
-
-    ## scannet flags
-    parser.add_argument("--scannet_sceneID", type=str, default='scene0000_00',
-                        help='sceneID to load from scannet')
-
-    ## llff flags
-    parser.add_argument("--factor", type=int, default=8,
-                        help='downsample factor for LLFF images')
-    parser.add_argument("--no_ndc", action='store_true',
-                        help='do not use normalized device coordinates (set for non-forward facing scenes)')
-    parser.add_argument("--lindisp", action='store_true',
-                        help='sampling linearly in disparity rather than depth')
-    parser.add_argument("--spherify", action='store_true',
-                        help='set for spherical 360 scenes')
-    parser.add_argument("--llffhold", type=int, default=8,
-                        help='will take every 1/N images as LLFF test set, paper uses 8')
-
-    # logging/saving options
-    parser.add_argument("--i_print",   type=int, default=100,
-                        help='frequency of console printout and metric loggin')
-    parser.add_argument("--i_img",     type=int, default=500,
-                        help='frequency of tensorboard image logging')
-    parser.add_argument("--i_weights", type=int, default=10000,
-                        help='frequency of weight ckpt saving')
-    parser.add_argument("--i_testset", type=int, default=1000,
-                        help='frequency of testset saving')
-    parser.add_argument("--i_video",   type=int, default=5000,
-                        help='frequency of render_poses video saving')
-
-    parser.add_argument("--finest_res",   type=int, default=512,
-                        help='finest resolultion for hashed embedding')
-    parser.add_argument("--log2_hashmap_size",   type=int, default=19,
-                        help='log2 of hashmap size')
-    parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
-                        help='learning rate')
-    parser.add_argument("--tv-loss-weight", type=float, default=1e-6,
-                        help='learning rate')
-
-    return parser
-
-
-def train():
-
-    parser = config_parser()
-    args = parser.parse_args()
-
-    # Load data
+    """
     K = None
     if args.dataset_type == 'llff':
         images, poses, bds, render_poses, i_test, bounding_box = load_llff_data(args.datadir, args.factor,
@@ -706,6 +573,12 @@ def train():
     else:
         print('Unknown dataset type', args.dataset_type, 'exiting')
         return
+    
+    """ 
+    Process HWF
+    (and convert poses into np array)
+    that's about it
+    """
 
     # Cast intrinsics to right types
     H, W, focal = hwf
@@ -721,7 +594,10 @@ def train():
 
     if args.render_test:
         render_poses = np.array(poses[i_test])
-
+    
+    """
+    Experiment saving
+    """
     # Create log dir and copy the config file
     basedir = args.basedir
     if args.i_embed==1:
@@ -752,7 +628,11 @@ def train():
         with open(f, 'w') as file:
             file.write(open(args.config, 'r').read())
 
-    # Create nerf model
+    """
+    Create nerf model
+
+    set render kwargs
+    """
     render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
     global_step = start
 
@@ -766,6 +646,9 @@ def train():
     # Move testing data to GPU
     render_poses = torch.Tensor(render_poses).to(device)
 
+    """
+    Skip to render only
+    """
     # Short circuit if only rendering out from trained model
     if args.render_only:
         print('RENDER ONLY')
@@ -787,47 +670,46 @@ def train():
 
             return
 
-    # Prepare raybatch tensor if batching random rays
+    """
+    Prepare raybatch tensor if batching random rays
+    """
     N_rand = args.N_rand
     use_batching = not args.no_batching
     if use_batching:
         # For random ray batching
-        print('get rays')
+        print("Using random ray batching")
+
         rays = np.stack([get_rays_np(H, W, K, p) for p in poses[:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
-        print('done, concats')
+        print("Concatenated direction and origin rays")
         rays_rgb = np.concatenate([rays, images[:,None]], 1) # [N, ro+rd+rgb, H, W, 3]
         rays_rgb = np.transpose(rays_rgb, [0,2,3,1,4]) # [N, H, W, ro+rd+rgb, 3]
         rays_rgb = np.stack([rays_rgb[i] for i in i_train], 0) # train images only
         rays_rgb = np.reshape(rays_rgb, [-1,3,3]) # [(N-1)*H*W, ro+rd+rgb, 3]
         rays_rgb = rays_rgb.astype(np.float32)
-        print('shuffle rays')
-        np.random.shuffle(rays_rgb)
 
-        print('done')
+        np.random.shuffle(rays_rgb)
+        print("Shuffled rays")
+
         i_batch = 0
 
     # Move training data to GPU
     if use_batching:
         images = torch.Tensor(images).to(device)
-    poses = torch.Tensor(poses).to(device)
-    if use_batching:
         rays_rgb = torch.Tensor(rays_rgb).to(device)
-
+    poses = torch.Tensor(poses).to(device)
 
     N_iters = 50000 + 1
-    print('Begin')
+    print('Start Training')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
     print('VAL views are', i_val)
-
-    # Summary writers
-    # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
 
     loss_list = []
     psnr_list = []
     time_list = []
     start = start + 1
     time0 = time.time()
+
     for i in trange(start, N_iters):
         # Sample random ray batch
         if use_batching:
@@ -989,4 +871,9 @@ def train():
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-    train()
+    parser = config_parser()
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    main()

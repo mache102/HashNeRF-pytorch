@@ -1,8 +1,11 @@
+import numpy as np
 import torch
 from kornia import create_meshgrid
 
-
-def get_ray_directions(H, W, focal):
+"""
+Ray utils for bbox 
+"""
+def get_directions(H, W, focal):
     """
     Get ray directions for all pixels in camera coordinate.
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
@@ -27,8 +30,7 @@ def get_ray_directions(H, W, focal):
 
     return directions
 
-
-def get_rays(directions, c2w):
+def ray_from_directions(directions, c2w):
     """
     Get ray origin and normalized directions in world coordinate for all pixels in one image.
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
@@ -45,12 +47,44 @@ def get_rays(directions, c2w):
     # Rotate ray directions from camera coordinate to the world coordinate
     rays_d = directions @ c2w[:3, :3].T # (H, W, 3)
     rays_d = rays_d / torch.norm(rays_d, dim=-1, keepdim=True)
+
     # The origin of all rays is the camera origin in world coordinate
     rays_o = c2w[:3, -1].expand(rays_d.shape) # (H, W, 3)
 
     rays_d = rays_d.view(-1, 3)
     rays_o = rays_o.view(-1, 3)
 
+    return rays_o, rays_d
+
+"""
+Other/ multi-use
+"""
+def get_rays(H, W, K, c2w):
+    """
+    Rays from 
+    height, width, camera intrinsics, camera to world matrix
+    """
+    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
+    i = i.t()
+    j = j.t()
+    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
+    # Rotate ray directions from camera frame to the world frame
+    rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    # Translate camera frame's origin to the world frame. It is the origin of all rays.
+    rays_o = c2w[:3,-1].expand(rays_d.shape)
+    return rays_o, rays_d
+
+def get_rays_np(H, W, K, c2w):
+    """
+    get_rays in numpy
+    """
+    i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
+    dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)
+    # Rotate ray directions from camera frame to the world frame
+    # dirs becomes (H, W, 1, 3)
+    rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    # Translate camera frame's origin to the world frame. It is the origin of all rays.
+    rays_o = np.broadcast_to(c2w[:3,-1], np.shape(rays_d))
     return rays_o, rays_d
 
 
@@ -96,3 +130,23 @@ def get_ndc_rays(H, W, focal, near, rays_o, rays_d):
     rays_d = torch.stack([d0, d1, d2], -1) # (B, 3)
     
     return rays_o, rays_d
+
+
+
+if __name__ == '__main__':
+    # test get_ray_directions
+    H, W, focal = 400, 400, 1.0
+    directions = get_directions(H, W, focal)
+    print(directions.shape)
+
+    # plot rays 3d
+
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    dots = directions.view(-1, 3).numpy()
+    ax.scatter(dots[:,0], dots[:,1], dots[:,2], c='r', marker='o')
+    plt.show()

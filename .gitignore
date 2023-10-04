@@ -131,3 +131,7 @@ dmypy.json
 # Datasets
 data/
 logs/
+
+# other
+cuda/
+imgs/

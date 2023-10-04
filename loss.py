@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 import pdb
 
-from utils import hash
+from embedding.hash_encoding import hash
 
 
 def total_variation_loss(embeddings, min_resolution, max_resolution, level, log2_hashmap_size, n_levels=16):
