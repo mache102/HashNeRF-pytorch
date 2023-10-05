@@ -63,11 +63,16 @@ def get_rays(H, W, K, c2w):
     """
     Rays from 
     height, width, camera intrinsics, camera to world matrix
+
+    Return shapes:
+        rays_o: (H, W, 3)
+        rays_d: (H, W, 3)
     """
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
     i = i.t()
     j = j.t()
     dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
+
     # Rotate ray directions from camera frame to the world frame
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
@@ -110,24 +115,29 @@ def get_ndc_rays(H, W, focal, near, rays_o, rays_d):
         rays_d: (N_rays, 3), the direction of the rays in NDC
     """
     # Shift ray origins to near plane
+    # (N_rays) or (H, W)
     t = -(near + rays_o[...,2]) / rays_d[...,2]
     rays_o = rays_o + t[...,None] * rays_d
 
     # Store some intermediate homogeneous results
+    # both are (N_rays)
     ox_oz = rays_o[...,0] / rays_o[...,2]
     oy_oz = rays_o[...,1] / rays_o[...,2]
     
     # Projection
+    # ^^
     o0 = -1./(W/(2.*focal)) * ox_oz
     o1 = -1./(H/(2.*focal)) * oy_oz
     o2 = 1. + 2. * near / rays_o[...,2]
 
+    # all are (N, 3)
     d0 = -1./(W/(2.*focal)) * (rays_d[...,0]/rays_d[...,2] - ox_oz)
     d1 = -1./(H/(2.*focal)) * (rays_d[...,1]/rays_d[...,2] - oy_oz)
     d2 = 1 - o2
     
-    rays_o = torch.stack([o0, o1, o2], -1) # (B, 3)
-    rays_d = torch.stack([d0, d1, d2], -1) # (B, 3)
+    # both are (N, 3)
+    rays_o = torch.stack([o0, o1, o2], -1) 
+    rays_d = torch.stack([d0, d1, d2], -1) 
     
     return rays_o, rays_d
 
