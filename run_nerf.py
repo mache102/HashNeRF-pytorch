@@ -8,6 +8,7 @@ import pickle
 import time
 
 from tqdm import tqdm, trange
+from typing import List, Tuple, Dict, Optional
 
 import torch
 import torch.nn.functional as F
@@ -167,6 +168,23 @@ def config_parser():
 
     return parser
 
+def eval_test_omninerf(savedir: str, rays_test, render_kwargs_test: Dict):
+    os.makedirs(savedir, exist_ok=True)
+    with torch.no_grad():
+        rgbs, _ = render_path([rays_test.o, rays_test.d], [H, W], render_kwargs_test, savedir=savedir, render_factor=args.render_factor)
+    print('Done rendering', savedir)
+    
+    # calculate MSE and PSNR for last image(gt pose)
+    gt_loss = img2mse(torch.tensor(rgbs[-1]), torch.tensor(rays_test.rgb[-1]))
+    gt_psnr = mse2psnr(gt_loss)
+    print('ground truth loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
+    with open(os.path.join(savedir, 'statistics.txt'), 'w') as f:
+        f.write('loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
+    
+    rgbs = np.concatenate([rgbs[:-1],rgbs[:-1][::-1]])
+    imageio.mimwrite(os.path.join(savedir, 'video2.gif'), to8b(rgbs), fps=10)
+    print('Saved test set')   
+   
 def main():
 
     """
@@ -341,9 +359,13 @@ def main():
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
-    # Move testing data to GPU
-    render_poses = torch.Tensor(render_poses).to(device)
-
+    if args.dataset_type != 'st3d':
+        # Move testing data to GPU
+        render_poses = torch.Tensor(render_poses).to(device)
+    else:
+        # all to tensor
+        rays = shuffle_rays(all_to_tensor(rays, device))
+        rays_test = all_to_tensor(rays_test, device)
     """
     Skip to render only
     """
@@ -354,27 +376,12 @@ def main():
         with torch.no_grad():
             if args.dataset_type == 'st3d':
                 if args.stage > 0:
-                    testsavedir = os.path.join(basedir, expname, 'renderonly_stage_{}_{:06d}'.format(args.stage, start))
+                    testsavedir = os.path.join(savepath, 'renderonly_stage_{}_{:06d}'.format(args.stage, start))
                 else:
-                    testsavedir = os.path.join(basedir, expname, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', start))
+                    testsavedir = os.path.join(savepath, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', start))
 
-                os.makedirs(testsavedir, exist_ok=True)
-                rays_o_test = torch.Tensor(rays_o_test).to(device)
-                rays_d_test = torch.Tensor(rays_d_test).to(device)
-
-                rgbs, _ = render_path([rays_o_test, rays_d_test], hw, render_kwargs_test, savedir=testsavedir, render_factor=args.render_factor)
-                print('Done rendering', testsavedir)
-                
-                # calculate MSE and PSNR for last image(gt pose)
-                gt_loss = img2mse(torch.tensor(rgbs[-1]), torch.tensor(rays_rgb_test[-1]))
-                gt_psnr = mse2psnr(gt_loss)
-                print('ground truth loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
-                with open(os.path.join(testsavedir, 'statistics.txt'), 'w') as f:
-                    f.write('loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
-                
-                rgbs = np.concatenate([rgbs[:-1],rgbs[:-1][::-1]])
-                imageio.mimwrite(os.path.join(testsavedir, 'video2.gif'), to8b(rgbs), fps=10)
-
+                eval_test_omninerf(savedir=testsavedir, rays_test=rays_test, 
+                                   render_kwargs_test=render_kwargs_test)
             else:
                 if args.render_test:
                     # render_test switches to test poses
@@ -383,7 +390,7 @@ def main():
                     # Default is smoother render_poses path
                     images = None
 
-                testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
+                testsavedir = os.path.join(savepath, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
                 os.makedirs(testsavedir, exist_ok=True)
                 print('test poses shape', render_poses.shape)
 
@@ -397,10 +404,6 @@ def main():
     Prepare raybatch tensor if batching random rays
     """
     if args.dataset_type == 'st3d':
-        # all to tensor
-        rays = shuffle_rays(all_to_tensor(rays, device))
-        rays_test = all_to_tensor(rays_test, device)
-
         # Prepare raybatch tensor if batching random rays
         N_rand = args.N_rand
         i_batch = 0
@@ -471,12 +474,10 @@ def main():
             ################################
 
             dt = time.time()-time0
-            # print(f"Step: {global_step}, Loss: {loss}, Time: {dt}")
-            #####           end            #####
 
             # Rest is logging
             if i%args.i_weights==0:
-                path = os.path.join(basedir, expname, '{:06d}.tar'.format(i))
+                path = os.path.join(savepath, '{:06d}.tar'.format(i))
                 torch.save({
                     'global_step': global_step,
                     'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
@@ -487,26 +488,11 @@ def main():
             
             if i%args.i_testset==0 and i > 0:
                 if args.stage > 0:
-                    testsavedir = os.path.join(basedir, expname, 'stage{}_test_{:06d}'.format(args.stage, i))
+                    testsavedir = os.path.join(savepath, 'stage{}_test_{:06d}'.format(args.stage, i))
                 else:
-                    testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
-                os.makedirs(testsavedir, exist_ok=True) 
-
-                with torch.no_grad():
-                    rgbs, _ = render_path([rays_o_test, rays_d_test], hw, render_kwargs_test, savedir=testsavedir, render_factor=args.render_factor)
-                print('Done rendering', testsavedir)
-                
-                # calculate MSE and PSNR for last image(gt pose)
-                gt_loss = img2mse(torch.tensor(rgbs[-1]), torch.tensor(rays_rgb_test[-1]))
-                gt_psnr = mse2psnr(gt_loss)
-                print('ground truth loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
-                with open(os.path.join(testsavedir, 'statistics.txt'), 'w') as f:
-                    f.write('loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
-                
-                rgbs = np.concatenate([rgbs[:-1],rgbs[:-1][::-1]])
-                imageio.mimwrite(os.path.join(testsavedir, 'video2.gif'), to8b(rgbs), fps=10)
-
-                print('Saved test set')   
+                    testsavedir = os.path.join(savepath, 'testset_{:06d}'.format(i))
+                eval_test_omninerf(savedir=testsavedir, rays_test=rays_test,
+                                      render_kwargs_test=render_kwargs_test)
 
                 
             if i%args.i_print==0:
@@ -675,7 +661,7 @@ def main():
             SAVE CHECKPOINT
             """
             if i%args.i_weights==0:
-                path = os.path.join(basedir, expname, '{:06d}.tar'.format(i))
+                path = os.path.join(savepath, '{:06d}.tar'.format(i))
                 if args.i_embed==1:
                     torch.save({
                         'global_step': global_step,
@@ -701,7 +687,7 @@ def main():
                 with torch.no_grad():
                     rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
                 print('Done, saving', rgbs.shape, disps.shape)
-                moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
+                moviebase = os.path.join(savepath, '{}_spiral_{:06d}_'.format(expname, i))
                 imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
                 imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
 
@@ -709,7 +695,7 @@ def main():
             RENDER TEST SET
             """
             if i%args.i_testset==0 and i > 0:
-                testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
+                testsavedir = os.path.join(savepath, 'testset_{:06d}'.format(i))
                 os.makedirs(testsavedir, exist_ok=True)
                 print('test poses shape', poses[i_test].shape)
                 with torch.no_grad():
@@ -729,7 +715,7 @@ def main():
                     "psnr": psnr_list,
                     "time": time_list
                 }
-                with open(os.path.join(basedir, expname, "loss_vs_time.pkl"), "wb") as fp:
+                with open(os.path.join(savepath, "loss_vs_time.pkl"), "wb") as fp:
                     pickle.dump(loss_psnr_time, fp)
 
             global_step += 1

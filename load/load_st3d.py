@@ -100,9 +100,12 @@ def load_st3d_data(baseDir: str, stage=0):
             image_coords = xz_interval
             print(image_coords.tolist())
             for i, p in enumerate(image_coords):
-                depth.append(np.sqrt(np.sum(np.square(coord - p), axis=2)))
-                ray_dir.append(coord)
-                images.append(rgb) 
+                raise NotImplementedError
+            
+                # depth, ray_dir, and images don't seem to be defined
+                # depth.append(np.sqrt(np.sum(np.square(coord - p), axis=2)))
+                # ray_dir.append(coord)
+                # images.append(rgb) 
 
     else:
         for idx, c in enumerate(image_coords):

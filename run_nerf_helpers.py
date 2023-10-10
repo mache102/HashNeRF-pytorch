@@ -26,6 +26,26 @@ mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEBUG = False
+"""
+render_path():
+    ...
+    for each pose 
+        ...
+        render():
+            ...
+            get_rays()
+            get_ndc_rays()
+            ...
+            for each chunk of rays_flat
+                render_rays():
+                    network_query_fn() == run_network():
+                        batchify()
+                    ...
+                    raw2outputs()
+                    sample_pdf()
+                    raw2outputs()
+"""
 
 
 def create_nerf(args):
@@ -286,27 +306,6 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
 
     return samples
 
-"""
-render_path():
-    ...
-    for each pose 
-        ...
-        render():
-            ...
-            get_rays()
-            get_ndc_rays()
-            ...
-            batchify_rays():
-                ...
-                for each chunk of rays_flat
-                    render_rays():
-                        network_query_fn() == run_network():
-                            batchify()
-                        ...
-                        raw2outputs()
-                        sample_pdf()
-                        raw2outputs()
-"""
 
 def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
                   near=0., far=1.,
