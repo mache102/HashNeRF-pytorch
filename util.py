@@ -56,3 +56,43 @@ def create_meshgrid_np(H, W, normalized_coordinates=True):
     # is already the same as the one from kornia
     # grid = np.transpose(grid, [1, 0, 2]) # W, H, 2
     return grid
+
+
+def create_expname(args):
+    if args.i_embed==1:
+        args.expname += "_hashXYZ"
+    elif args.i_embed==0:
+        args.expname += "_posXYZ"
+    if args.i_embed_views==2:
+        args.expname += "_sphereVIEW"
+    elif args.i_embed_views==0:
+        args.expname += "_posVIEW"
+    args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
+    args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
+    args.expname += "_RAdam"
+    if args.sparse_loss_weight > 0:
+        args.expname += "_sparse" + str(args.sparse_loss_weight)
+    args.expname += "_TV" + str(args.tv_loss_weight)
+    #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
+
+    return args.expname
+
+def all_to_tensor(rays, device):
+    """
+    Iterate over all rays and convert to torch tensor
+    (dataclass)
+    """
+    for key, value in rays.__dict__.items():
+        if value is not None:
+            rays.__dict__[key] = torch.Tensor(value).to(device)
+    return rays
+
+def shuffle_rays(rays):
+    perm_anchor = rays.rgb 
+    rand_idx = torch.randperm(perm_anchor.shape[0])
+
+    for key, value in rays.__dict__.items():
+        if value is not None:
+            rays.__dict__[key] = value[rand_idx]
+
+    return rays

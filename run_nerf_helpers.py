@@ -18,7 +18,7 @@ from ray_util import *
 
 from embedding.embedder import get_embedder, Embedder
 from embedding.hash_encoding import HashEmbedder, SHEncoder
-from models import NeRF, NeRFSmall
+from models import NeRF, NeRFSmall, NeRFGradient
 
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
@@ -27,31 +27,6 @@ to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def batchify(fn, chunk):
-    """Constructs a version of 'fn' that applies to smaller batches.
-    """
-    if chunk is None:
-        return fn
-    def ret(inputs):
-        return torch.cat([fn(inputs[i:i+chunk]) for i in range(0, inputs.shape[0], chunk)], 0)
-    return ret
-
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
-    """Prepares inputs and applies network 'fn'.
-    """
-    inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    embedded, keep_mask = embed_fn(inputs_flat)
-
-    if viewdirs is not None:
-        input_dirs = viewdirs[:,None].expand(inputs.shape)
-        input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
-        embedded_dirs = embeddirs_fn(input_dirs_flat)
-        embedded = torch.cat([embedded, embedded_dirs], -1)
-
-    outputs_flat = batchify(fn, netchunk)(embedded)
-    outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
-    outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
-    return outputs
 
 def create_nerf(args):
     """
@@ -60,6 +35,8 @@ def create_nerf(args):
 
     """
     step 1: create embedding functions
+
+    TODO: how to create embed for st3d + hash?
     """
     embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
     if args.i_embed==1:
@@ -85,10 +62,17 @@ def create_nerf(args):
                         num_layers_color=3,
                         hidden_dim_color=64,
                         input_ch=input_ch, input_ch_views=input_ch_views).to(device)
-    else:
+        
+    elif not args.use_gradient:
         model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
                  input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+    else:
+        model = NeRFGradient(D=args.netdepth, W=args.netwidth,
+                     input_ch=input_ch, output_ch=output_ch, skips=skips,
+                     input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+        
+
     grad_vars = list(model.parameters())
 
     """
@@ -104,10 +88,15 @@ def create_nerf(args):
                         num_layers_color=3,
                         hidden_dim_color=64,
                         input_ch=input_ch, input_ch_views=input_ch_views).to(device)
-        else:
+        elif not args.use_gradient:
             model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                          input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+                    input_ch=input_ch, output_ch=output_ch, skips=skips,
+                    input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+        else:
+            model_fine = NeRFGradient(D=args.netdepth_fine, W=args.netwidth_fine,
+                        input_ch=input_ch, output_ch=output_ch, skips=skips,
+                        input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+
         grad_vars += list(model_fine.parameters())
 
     network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
@@ -179,7 +168,7 @@ def create_nerf(args):
     }
 
     # NDC only good for LLFF-style forward facing data
-    if args.dataset_type != 'llff' or args.no_ndc:
+    if (args.dataset_type not in ['llff', 'st3d']) or args.no_ndc:
         print('Not ndc!')
         render_kwargs_train['ndc'] = False
         render_kwargs_train['lindisp'] = args.lindisp
@@ -191,11 +180,43 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
+def batchify(fn, chunk):
+    """Constructs a version of 'fn' that applies to smaller batches.
+    """
+    if chunk is None:
+        return fn
+    def ret(inputs):
+        return torch.cat([fn(inputs[i:i+chunk]) for i in range(0, inputs.shape[0], chunk)], 0)
+    return ret
+
+def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+    """Prepares inputs and applies network 'fn'.
+    """
+    inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
+    embedded, keep_mask = embed_fn(inputs_flat)
+
+    if viewdirs is not None:
+        input_dirs = viewdirs[:,None].expand(inputs.shape)
+        input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
+        embedded_dirs = embeddirs_fn(input_dirs_flat)
+        embedded = torch.cat([embedded, embedded_dirs], -1)
+
+    outputs_flat = batchify(fn, netchunk)(embedded)
+    outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
+    outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
+    return outputs
+
 
 def get_embedder(multires, args, i=0):
+    """
+    -1: no embedding
+    0: Standard positional encoding (Nerf, section 5.1)
+    1: Hashed pos encoding (Instant-ngp)
+    2: Spherical harmonic encoding (?)
+    """
     if i == -1:
         return nn.Identity(), 3
-    elif i==0:
+    elif i == 0:
         embed_kwargs = {
                     'include_input' : True,
                     'input_dims' : 3,
@@ -208,12 +229,12 @@ def get_embedder(multires, args, i=0):
         embedder_obj = Embedder(**embed_kwargs)
         embed = lambda x, eo=embedder_obj : eo.embed(x)
         out_dim = embedder_obj.out_dim
-    elif i==1:
+    elif i == 1:
         embed = HashEmbedder(bounding_box=args.bounding_box, \
                             log2_hashmap_size=args.log2_hashmap_size, \
                             finest_resolution=args.finest_res)
         out_dim = embed.out_dim
-    elif i==2:
+    elif i == 2:
         embed = SHEncoder()
         out_dim = embed.out_dim
     return embed, out_dim

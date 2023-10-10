@@ -173,3 +173,41 @@ class NeRFSmall(nn.Module):
 
         return outputs
 
+
+class NeRFGradient(NeRF):
+    def __init__(self, **kwargs):
+        """ 
+        """
+        super(NeRFGradient, self).__init__(**kwargs)
+        if self.use_viewdirs:
+            self.gradient_linear = nn.Linear(self.W//2, 3)
+        
+    def forward(self, x):
+        if x.shape[-1] > self.input_ch + self.input_ch_views:
+            input_pts, input_views, input_depth = torch.split(x, [self.input_ch, self.input_ch_views, 1], dim=-1)
+        else:
+            input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
+
+        h = input_pts
+        for i, l in enumerate(self.pts_linears):
+            h = self.pts_linears[i](h)
+            h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([input_pts, h], -1)
+
+        if self.use_viewdirs:
+            alpha = self.alpha_linear(h)
+            feature = self.feature_linear(h)
+            h = torch.cat([feature, input_views], -1)
+        
+            for i, l in enumerate(self.views_linears):
+                h = self.views_linears[i](h)
+                h = F.relu(h)
+
+            rgb = self.rgb_linear(h)
+            gradient = self.gradient_linear(h)
+            outputs = torch.cat([rgb, alpha, gradient], -1)
+        else:
+            outputs = self.output_linear(h)
+
+        return outputs    
