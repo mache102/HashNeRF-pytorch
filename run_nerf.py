@@ -183,7 +183,7 @@ def eval_test_omninerf(savedir: str, rays_test, render_kwargs_test: Dict):
         f.write('loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
     
     rgbs = np.concatenate([rgbs[:-1],rgbs[:-1][::-1]])
-    imageio.mimwrite(os.path.join(savedir, 'video2.gif'), to8b(rgbs), fps=10)
+    imageio.mimwrite(os.path.join(savedir, 'video2.gif'), to8b(rgbs), duration=1000//10)
     print('Saved test set')   
    
 def main():
@@ -397,7 +397,7 @@ def main():
 
                 rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
                 print('Done rendering', testsavedir)
-                imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
+                imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), duration=1000//30, quality=8)
 
             return
 
@@ -689,8 +689,8 @@ def main():
                     rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
                 print('Done, saving', rgbs.shape, disps.shape)
                 moviebase = os.path.join(savepath, '{}_spiral_{:06d}_'.format(expname, i))
-                imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-                imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+                imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), duration=1000//30, quality=8)
+                imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), duration=1000//30, quality=8)
 
             """
             RENDER TEST SET
