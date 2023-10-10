@@ -27,6 +27,7 @@ from load.load_st3d import load_st3d_data
 
 from util import create_expname, all_to_tensor, shuffle_rays
 
+# 20231010 15:25
 np.random.seed(0)
 DEBUG = False
 
