@@ -449,7 +449,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, args, gt_imgs=None, 
             print(i, time.time() - t)
             t = time.time()
             rgb, depth, acc, _ = render(H, W, K=K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
-            
+
             rgbs.append(rgb.cpu().numpy())
             # normalize depth to [0,1]
             depth = (depth - near) / (far - near)

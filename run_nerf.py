@@ -169,7 +169,7 @@ def config_parser():
 
     return parser
 
-def eval_test_omninerf(savedir: str, rays_test, render_kwargs_test: Dict):
+def eval_test_omninerf(H, W, savedir: str, rays_test, render_kwargs_test: Dict):
     os.makedirs(savedir, exist_ok=True)
     with torch.no_grad():
         rgbs, _ = render_path([rays_test.o, rays_test.d], [H, W], render_kwargs_test, args=args, savedir=savedir, render_factor=args.render_factor)
@@ -382,7 +382,7 @@ def main():
                 else:
                     testsavedir = os.path.join(savepath, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', start))
 
-                eval_test_omninerf(savedir=testsavedir, rays_test=rays_test, 
+                eval_test_omninerf(H, W, savedir=testsavedir, rays_test=rays_test, 
                                    render_kwargs_test=render_kwargs_test)
             else:
                 if args.render_test:
@@ -493,7 +493,7 @@ def main():
                     testsavedir = os.path.join(savepath, 'stage{}_test_{:06d}'.format(args.stage, i))
                 else:
                     testsavedir = os.path.join(savepath, 'testset_{:06d}'.format(i))
-                eval_test_omninerf(savedir=testsavedir, rays_test=rays_test,
+                eval_test_omninerf(H, W, savedir=testsavedir, rays_test=rays_test,
                                       render_kwargs_test=render_kwargs_test)
 
                 
