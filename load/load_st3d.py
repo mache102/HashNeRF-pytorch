@@ -5,16 +5,17 @@ import math
 import cv2
 import glob
 
-from dataclasses import dataclass 
+from dataclasses import dataclass, field
 from typing import Optional, List 
 
-@dataclass 
+
+@dataclass
 class EquirectRays:
-    o: List[any] = None
-    d: List[any] = None
-    rgb: List[any] = None
-    depth: List[any] = None
-    g: Optional[List[any]] = None # gradient (not present in test set)
+    o: List[any] = field(default_factory=list)
+    d: List[any] = field(default_factory=list)
+    rgb: List[any] = field(default_factory=list)
+    depth: List[any] = field(default_factory=list)
+    g: Optional[List[any]] = None  # gradient (not present in the test set)
 
 def concat_all(batch):
     """

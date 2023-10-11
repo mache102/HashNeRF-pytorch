@@ -16,8 +16,9 @@ from run_nerf_helpers import *
 from radam import RAdam
 from ray_util import *
 
-from embedding.embedder import get_embedder, Embedder
-from embedding.hash_encoding import HashEmbedder, SHEncoder
+from embedding.embedder import Embedder
+from embedding.hash_encoding import HashEmbedder 
+from embedding.spherical_harmonic import SHEncoder
 from models import NeRF, NeRFSmall, NeRFGradient
 
 # Misc

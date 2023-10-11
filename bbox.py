@@ -38,7 +38,10 @@ def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
             find_min_max(min_point)
             find_min_max(max_point)
 
-    return (torch.tensor(min_bound)-torch.tensor([1.0,1.0,1.0]), torch.tensor(max_bound)+torch.tensor([1.0,1.0,1.0]))
+    min_coords = torch.tensor(min_bound)-torch.tensor([1.0,1.0,1.0])
+    max_coords = torch.tensor(max_bound)+torch.tensor([1.0,1.0,1.0])
+    print(f"Bounding box: {min_coords}, {max_coords}")
+    return (min_coords, max_coords)
 
 
 def get_bbox3d_for_llff(poses, hwf, near=0.0, far=1.0):
