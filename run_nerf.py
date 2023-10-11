@@ -172,7 +172,8 @@ def config_parser():
 def eval_test_omninerf(H, W, savedir: str, rays_test, render_kwargs_test: Dict):
     os.makedirs(savedir, exist_ok=True)
     with torch.no_grad():
-        rgbs, _ = render_path([rays_test.o, rays_test.d], [H, W], render_kwargs_test, args=args, savedir=savedir, render_factor=args.render_factor)
+        rgbs, _ = render_path([rays_test.o, rays_test.d], [H, W], render_kwargs=render_kwargs_test, 
+                              args=args, chunk=None, savedir=savedir, render_factor=args.render_factor)
     print('Done rendering', savedir)
     
     # calculate MSE and PSNR for last image(gt pose)
@@ -396,7 +397,9 @@ def main():
                 os.makedirs(testsavedir, exist_ok=True)
                 print('test poses shape', render_poses.shape)
 
-                rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, args=args, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
+                rgbs, _ = render_path(render_poses, hwf, K, render_kwargs=render_kwargs_test, args=args, 
+                                      chunk=args.chunk, gt_imgs=images, savedir=testsavedir, 
+                                      render_factor=args.render_factor)
                 print('Done rendering', testsavedir)
                 imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), duration=1000//30, quality=8)
 
@@ -687,7 +690,9 @@ def main():
             if i%args.i_video==0 and i > 0:
                 # Turn on testing mode
                 with torch.no_grad():
-                    rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, args=args)
+                    rgbs, disps = render_path(render_poses, hwf, K, 
+                                              render_kwargs=render_kwargs_test, 
+                                              args=args, chunk=args.chunk)
                 print('Done, saving', rgbs.shape, disps.shape)
                 moviebase = os.path.join(savepath, '{}_spiral_{:06d}_'.format(expname, i))
                 imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), duration=1000//30, quality=8)
@@ -701,7 +706,10 @@ def main():
                 os.makedirs(testsavedir, exist_ok=True)
                 print('test poses shape', poses[i_test].shape)
                 with torch.no_grad():
-                    render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, args=args, gt_imgs=images[i_test], savedir=testsavedir)
+                    render_path(torch.Tensor(poses[i_test]).to(device), hwf, K,
+                                render_kwargs=render_kwargs_test, args=args,
+                                chunk=args.chunk, gt_imgs=images[i_test], 
+                                savedir=testsavedir)
                 print('Saved test set')
 
             """
