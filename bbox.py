@@ -4,6 +4,7 @@ Get bounding boxes
 import json
 import numpy as np
 import torch
+import pdb
 
 from ray_util import ray_from_directions, get_directions, get_ndc_rays
 
@@ -38,11 +39,11 @@ def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
             find_min_max(min_point)
             find_min_max(max_point)
 
-    min_coords = torch.tensor(min_bound)-torch.tensor([1.0,1.0,1.0])
-    max_coords = torch.tensor(max_bound)+torch.tensor([1.0,1.0,1.0])
-    print(f"Bounding box: {min_coords}, {max_coords}")
-    return (min_coords, max_coords)
-
+    min_coord = torch.tensor(min_bound) - torch.tensor([1.0, 1.0, 1.0])
+    max_coord = torch.tensor(max_bound) + torch.tensor([1.0, 1.0, 1.0])
+    print(f"bbox: {min_coord}, {max_coord}")
+    pdb.set_trace()
+    return (min_coord, max_coord)
 
 def get_bbox3d_for_llff(poses, hwf, near=0.0, far=1.0):
     H, W, focal = hwf
@@ -75,7 +76,11 @@ def get_bbox3d_for_llff(poses, hwf, near=0.0, far=1.0):
             find_min_max(min_point)
             find_min_max(max_point)
 
-    return (torch.tensor(min_bound)-torch.tensor([0.1,0.1,0.0001]), torch.tensor(max_bound)+torch.tensor([0.1,0.1,0.0001]))
+    min_coord = torch.tensor(min_bound) - torch.tensor([0.1, 0.1, 1e-4])
+    max_coord = torch.tensor(max_bound) + torch.tensor([0.1, 0.1, 1e-4])
+    print(f"bbox: {min_coord}, {max_coord}")
+    pdb.set_trace()
+    return (min_coord, max_coord)
 
 
 if __name__=="__main__":
