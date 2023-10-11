@@ -4,6 +4,7 @@ import os
 import pdb
 import pickle
 import time
+import imageio
 
 from tqdm import tqdm
 
@@ -12,7 +13,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-from run_nerf_helpers import *
 from radam import RAdam
 from ray_util import *
 
@@ -308,7 +308,7 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
     return samples
 
 
-def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
+def render(H, W, focal=None, K=None, chunk=1024*32, rays=None, c2w=None, ndc=True,
                   near=0., far=1.,
                   use_viewdirs=False, c2w_staticcam=None,
                   **kwargs):
@@ -323,8 +323,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         each example in batch.
       c2w: array of shape [3, 4]. Camera-to-world transformation matrix.
       ndc: bool. If True, represent ray origin, direction in NDC coordinates.
-      near: float or array of shape [batch_size]. Nearest distance for a ray.
-      far: float or array of shape [batch_size]. Farthest distance for a ray.
+      near, far: ray distances
       use_viewdirs: bool. If True, use viewing direction of a point in space in model.
       c2w_staticcam: array of shape [3, 4]. If not None, use this transformation matrix for
        camera while using other c2w argument for viewing directions.
@@ -337,7 +336,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     """
     if c2w is not None:
         # special case to render full image
-        rays_o, rays_d = get_rays(H, W, K, c2w)
+        rays_o, rays_d = get_rays(H, W, c2w, focal=focal, K=K)
     else:
         # use provided ray batch
         rays_o, rays_d = rays
@@ -347,7 +346,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         viewdirs = rays_d
         if c2w_staticcam is not None:
             # special case to visualize effect of viewdirs
-            rays_o, rays_d = get_rays(H, W, K, c2w_staticcam)
+            rays_o, rays_d = get_rays(H, W, c2w_staticcam, focal=focal, K=K)
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
         viewdirs = torch.reshape(viewdirs, [-1,3]).float()
 
@@ -392,70 +391,107 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
     return ret_list + [ret_dict]
 
-
-def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
+def render_path(render_poses, hwf, K, chunk, render_kwargs, args, gt_imgs=None, savedir=None, render_factor=0):
     """
     Rendering for test set
-    
     """
-    H, W, focal = hwf
+    dataset_type = args.dataset_type
+    if len(hwf) == 3:
+        H, W, focal = hwf
+    else:
+        H, W = hwf
+        focal = None
     near, far = render_kwargs['near'], render_kwargs['far']
 
     if render_factor!=0:
         # Render downsampled for speed
         H = H//render_factor
         W = W//render_factor
-        focal = focal/render_factor
+        if focal is not None:
+            focal = focal/render_factor
 
     rgbs = []
     depths = []
-    psnrs = []
 
-    t = time.time()
-    for i, c2w in enumerate(tqdm(render_poses)):
-        print(i, time.time() - t)
+    if dataset_type == "st3d":
+        rays_o, rays_d = render_poses
         t = time.time()
-        rgb, depth, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
-        rgbs.append(rgb.cpu().numpy())
-        # normalize depth to [0,1]
-        depth = (depth - near) / (far - near)
-        depths.append(depth.cpu().numpy())
-        if i==0:
-            print(rgb.shape, depth.shape)
+        batch = H*W
+        
+        for i in tqdm(range(rays_o.shape[0] // batch)):
+            print(i, time.time() - t)
+            t = time.time()
+            rgb, dep, grad,  _ = render(H, W, rays=[rays_o[i*batch:(i+1)*batch], rays_d[i*batch:(i+1)*batch]], **render_kwargs)
+            if i==0:
+                print(rgb.shape, dep.shape)
 
+            if savedir is not None:
+                rgb8 = rgb.reshape(H, W, 3).cpu().numpy()
+                rgbs.append(rgb8)
+                
+                filename = os.path.join(savedir, '{:03d}.png'.format(i))
+                imageio.imwrite(filename, to8b(rgb8))
+                
+                dep8 = dep.reshape(H, W).cpu().numpy()
+                depths.append(dep8)
+                filename = os.path.join(savedir, 'd_{:03d}.png'.format(i))
+                
+                imageio.imwrite(filename, to8b(dep8))            
+        
+        
+        rgbs = np.stack(rgbs, 0)
+        depths = np.stack(depths, 0) 
+    else:
+        psnrs = []
+
+        t = time.time()
+        for i, c2w in enumerate(tqdm(render_poses)):
+            print(i, time.time() - t)
+            t = time.time()
+            if dataset_type != "st3d":
+                rgb, depth, acc, _ = render(H, W, K=K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+            else:
+                rgb, depth, acc, _ = render(H, W, K=K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+            rgbs.append(rgb.cpu().numpy())
+            # normalize depth to [0,1]
+            depth = (depth - near) / (far - near)
+            depths.append(depth.cpu().numpy())
+            if i==0:
+                print(rgb.shape, depth.shape)
+
+            if gt_imgs is not None and render_factor==0:
+                try:
+                    gt_img = gt_imgs[i].cpu().numpy()
+                except:
+                    gt_img = gt_imgs[i]
+                p = -10. * np.log10(np.mean(np.square(rgb.cpu().numpy() - gt_img)))
+                print(p)
+                psnrs.append(p)
+
+            if savedir is not None:
+                # save rgb and depth as a figure
+                fig = plt.figure(figsize=(25,15))
+                ax = fig.add_subplot(1, 2, 1)
+                rgb8 = to8b(rgbs[-1])
+                ax.imshow(rgb8)
+                ax.axis('off')
+                ax = fig.add_subplot(1, 2, 2)
+                ax.imshow(depths[-1], cmap='plasma', vmin=0, vmax=1)
+                ax.axis('off')
+                filename = os.path.join(savedir, '{:03d}.png'.format(i))
+                # save as png
+                plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+                plt.close(fig)
+                # imageio.imwrite(filename, rgb8)
+
+
+        rgbs = np.stack(rgbs, 0)
+        depths = np.stack(depths, 0)
         if gt_imgs is not None and render_factor==0:
-            try:
-                gt_img = gt_imgs[i].cpu().numpy()
-            except:
-                gt_img = gt_imgs[i]
-            p = -10. * np.log10(np.mean(np.square(rgb.cpu().numpy() - gt_img)))
-            print(p)
-            psnrs.append(p)
-
-        if savedir is not None:
-            # save rgb and depth as a figure
-            fig = plt.figure(figsize=(25,15))
-            ax = fig.add_subplot(1, 2, 1)
-            rgb8 = to8b(rgbs[-1])
-            ax.imshow(rgb8)
-            ax.axis('off')
-            ax = fig.add_subplot(1, 2, 2)
-            ax.imshow(depths[-1], cmap='plasma', vmin=0, vmax=1)
-            ax.axis('off')
-            filename = os.path.join(savedir, '{:03d}.png'.format(i))
-            # save as png
-            plt.savefig(filename, bbox_inches='tight', pad_inches=0)
-            plt.close(fig)
-            # imageio.imwrite(filename, rgb8)
-
-
-    rgbs = np.stack(rgbs, 0)
-    depths = np.stack(depths, 0)
-    if gt_imgs is not None and render_factor==0:
-        avg_psnr = sum(psnrs)/len(psnrs)
-        print("Avg PSNR over Test set: ", avg_psnr)
-        with open(os.path.join(savedir, "test_psnrs_avg{:0.2f}.pkl".format(avg_psnr)), "wb") as fp:
-            pickle.dump(psnrs, fp)
+            avg_psnr = sum(psnrs)/len(psnrs)
+            print("Avg PSNR over Test set: ", avg_psnr)
+            with open(os.path.join(savedir, "test_psnrs_avg{:0.2f}.pkl".format(avg_psnr)), "wb") as fp:
+                pickle.dump(psnrs, fp)
 
     return rgbs, depths
 

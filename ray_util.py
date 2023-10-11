@@ -59,7 +59,7 @@ def ray_from_directions(directions, c2w):
 """
 Other/ multi-use
 """
-def get_rays(H, W, K, c2w):
+def get_rays(H, W, c2w, focal=None, K=None):
     """
     Rays from 
     height, width, camera intrinsics, camera to world matrix
@@ -68,10 +68,23 @@ def get_rays(H, W, K, c2w):
         rays_o: (H, W, 3)
         rays_d: (H, W, 3)
     """
+    if focal is None and K is None:
+        raise ValueError("focal and K cannot be both None")
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
     i = i.t()
     j = j.t()
-    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
+    # use values in K if provided,
+    # otherwise defaults to hwf
+    # K = np.array([
+    #     [focal, 0, 0.5*W],
+    #     [0, focal, 0.5*H],
+    #     [0, 0, 1]
+    # ])
+
+    if K is None:
+        dirs = torch.stack([(i - 0.5 * W) / focal, -(j - 0.5 * H) / focal, -torch.ones_like(i)], -1)
+    else:
+        dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
 
     # Rotate ray directions from camera frame to the world frame
     rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
@@ -79,12 +92,17 @@ def get_rays(H, W, K, c2w):
     rays_o = c2w[:3,-1].expand(rays_d.shape)
     return rays_o, rays_d
 
-def get_rays_np(H, W, K, c2w):
+def get_rays_np(H, W, c2w, focal=None, K=None):
     """
     get_rays in numpy
     """
+    if focal is None and K is None:
+        raise ValueError("focal and K cannot be both None")
     i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
-    dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)
+    if K is None:
+        dirs = np.stack([(i - 0.5 * W) / focal, -(j - 0.5 * H) / focal, -np.ones_like(i)], -1)
+    else:
+        dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
     # dirs becomes (H, W, 1, 3)
     rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
