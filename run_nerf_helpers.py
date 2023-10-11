@@ -421,7 +421,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, args, gt_imgs=None, 
         for i in tqdm(range(rays_o.shape[0] // batch)):
             print(i, time.time() - t)
             t = time.time()
-            rgb, dep, grad,  _ = render(H, W, rays=[rays_o[i*batch:(i+1)*batch], rays_d[i*batch:(i+1)*batch]], **render_kwargs)
+            rgb, dep, grad,  _ = render(H, W, rays=[rays_o[i*batch:(i+1)*batch], rays_d[i*batch:(i+1)*batch]], **render_kwargs, ndc=False)
             if i==0:
                 print(rgb.shape, dep.shape)
 
@@ -448,10 +448,8 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, args, gt_imgs=None, 
         for i, c2w in enumerate(tqdm(render_poses)):
             print(i, time.time() - t)
             t = time.time()
-            if dataset_type != "st3d":
-                rgb, depth, acc, _ = render(H, W, K=K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
-            else:
-                rgb, depth, acc, _ = render(H, W, K=K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+            rgb, depth, acc, _ = render(H, W, K=K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+            
             rgbs.append(rgb.cpu().numpy())
             # normalize depth to [0,1]
             depth = (depth - near) / (far - near)

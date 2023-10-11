@@ -431,7 +431,7 @@ def main():
 
             #####  Core optimization loop  #####
 
-            rgb, dep, grad, extras = render(H, W, rays=[batch_o, batch_d], **render_kwargs_train)
+            rgb, dep, grad, extras = render(H, W, rays=[batch_o, batch_d], **render_kwargs_train, ndc=False)
 
             optimizer.zero_grad()
             # import pdb; pdb.set_trace()
