@@ -391,7 +391,7 @@ def render(H, W, focal=None, K=None, chunk=1024*32, rays=None, c2w=None, ndc=Tru
     ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
     return ret_list + [ret_dict]
 
-def render_path(render_poses, hwf, K, render_kwargs, args, chunk=None, gt_imgs=None, savedir=None, render_factor=0):
+def render_path(render_poses, hwf, render_kwargs, args, K=None, chunk=None, gt_imgs=None, savedir=None, render_factor=0):
     """
     Rendering for test set
     """

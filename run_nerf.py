@@ -397,7 +397,7 @@ def main():
                 os.makedirs(testsavedir, exist_ok=True)
                 print('test poses shape', render_poses.shape)
 
-                rgbs, _ = render_path(render_poses, hwf, K, render_kwargs=render_kwargs_test, args=args, 
+                rgbs, _ = render_path(render_poses, hwf, K=K, render_kwargs=render_kwargs_test, args=args, 
                                       chunk=args.chunk, gt_imgs=images, savedir=testsavedir, 
                                       render_factor=args.render_factor)
                 print('Done rendering', testsavedir)
@@ -690,7 +690,7 @@ def main():
             if i%args.i_video==0 and i > 0:
                 # Turn on testing mode
                 with torch.no_grad():
-                    rgbs, disps = render_path(render_poses, hwf, K, 
+                    rgbs, disps = render_path(render_poses, hwf, K=K, 
                                               render_kwargs=render_kwargs_test, 
                                               args=args, chunk=args.chunk)
                 print('Done, saving', rgbs.shape, disps.shape)
@@ -706,7 +706,7 @@ def main():
                 os.makedirs(testsavedir, exist_ok=True)
                 print('test poses shape', poses[i_test].shape)
                 with torch.no_grad():
-                    render_path(torch.Tensor(poses[i_test]).to(device), hwf, K,
+                    render_path(torch.Tensor(poses[i_test]).to(device), hwf, K=K,
                                 render_kwargs=render_kwargs_test, args=args,
                                 chunk=args.chunk, gt_imgs=images[i_test], 
                                 savedir=testsavedir)
