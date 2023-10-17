@@ -103,8 +103,14 @@ def search_panoramas(coords: Tuple[float, float]) -> List[PanoramaInfo]:
 
 if __name__ == '__main__':
     from .pn_utils import coords_from_url
+    from .pn_retriever import get_panorama
+    import os
+    from tqdm import trange
+    import asyncio
 
-    url = "https://www.google.com/maps/@29.2030191,-95.2176061,3a,75y,256.4h,90t/data=!3m7!1e1!3m5!1syGLFyQYAnt_VvLidyT1-SA!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fpanoid%3DyGLFyQYAnt_VvLidyT1-SA%26cb_client%3Dmaps_sv.tactile.gps%26w%3D203%26h%3D100%26yaw%3D254.5042%26pitch%3D0%26thumbfov%3D100!7i16384!8i8192?entry=ttu"
+    url = "https://www.google.com/maps/@37.4237749,-121.8895998,18.75z?entry=ttu"
+    save_dir = "../imgs/pn_cluster_test/"
+    os.makedirs(save_dir, exist_ok=True)
 
     coords = coords_from_url(url)
 
@@ -112,8 +118,16 @@ if __name__ == '__main__':
     # sort by offset (distance from search point)
     panos.sort(key=lambda x: x.offset)
 
-    for pano in panos:
-        print(pano)
+    for i in trange(len(panos)):
+        pano = panos[i]
+        if pano.date is None:
+            continue
+        if pano.date > "2011-01":
+            pano_img = asyncio.run(get_panorama(pano.pano_id, zoom=1))
+            fn = f"p_{str(i).zfill(3)}"
+            pano_img.save(os.path.join(save_dir, fn + ".png"))
+
+            
 
 
 

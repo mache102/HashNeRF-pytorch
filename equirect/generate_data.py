@@ -17,6 +17,12 @@ from Panorama.pn_retriever import get_panorama
 from Panorama.pn_crop import crop_pano
 from Panorama.pn_depthmap import get_depth_map
 
+base_dir = '../data/'
+dir_name = "gmap_rail1"
+save_path = os.path.join(base_dir, dir_name)
+os.makedirs(os.path.join(save_path, 'rm_occluded'), exist_ok=True)
+os.makedirs(os.path.join(save_path, 'test'), exist_ok=True)
+
 def get_pano_id(url):
     """
     exactly 22 chars. 
@@ -58,6 +64,11 @@ depth_map = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
 depth_map = np.repeat(depth_map.reshape(depth_map.shape[0], depth_map.shape[1], 1), 3, axis=2)
 
 rgb = pano_img.copy()
+
+# save the rgb and depth map arrays as images
+
+Image.fromarray(np.uint8(rgb)).save(os.path.join(save_path, f"{dir_name}_rgb.png"))
+Image.fromarray(np.uint8(depth_map[..., 0]*255)).save(os.path.join(save_path, f"{dir_name}_d.png"))
 
 # fig = plt.figure()
 # ax = fig.add_subplot(121)
@@ -239,8 +250,9 @@ print(max_, min_)
 
 cam_pos = np.concatenate(cam_pos, axis=0)
 # save training, testnig camera poses
-# with open(os.path.join(baseDir, 'cam_pos.txt'), 'w') as fp:
-#     for p in cam_pos: fp.write('%f %f %f\n' % (p[0], p[1], p[2])) 
+with open(os.path.join(save_path, 'cam_pos.txt'), 'w') as fp:
+    for p in cam_pos: 
+        fp.write(f'{p[0]} {p[1]} {p[2]}\n')
 
 """
 some custom set test poses
@@ -259,12 +271,18 @@ test_pos = np.array([[-0.05,      0.,       -0.05    ],
 
 # with open(os.path.join(baseDir, 'test', 'cam_pos.txt'), 'w') as fp:
 #     for p in test_pos: fp.write('%f %f %f\n' % (p[0], p[1], p[2])) 
+with open(os.path.join(save_path, 'test', 'cam_pos.txt'), 'w') as fp:
+    for p in test_pos: 
+        fp.write(f'{p[0]} {p[1]} {p[2]}\n')
+
 
 """
 finally concat to create a comprehensive list of camera poses
 """
 cam_pos = np.concatenate([cam_pos, test_pos, np.array([0.0, 0.0, 0.0]).reshape(1,3)])
 
+
+exit()
 # poses = 90
 # radius = 0.3
 
@@ -285,11 +303,7 @@ cam_pos = np.concatenate([cam_pos, test_pos, np.array([0.0, 0.0, 0.0]).reshape(1
 # ax.scatter(*cam_pos.T)
 # plt.show()
 # exit()
-base_dir = '../data/'
-dir_name = "gmap_rail1"
-save_path = os.path.join(base_dir, dir_name)
-os.makedirs(os.path.join(save_path, 'rm_occluded'), exist_ok=True)
-os.makedirs(os.path.join(save_path, 'test'), exist_ok=True)
+
 
 # images = []
 # depth = []
