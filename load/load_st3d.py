@@ -110,6 +110,7 @@ def load_st3d_data(baseDir: str, stage=0):
 
     else:
         for idx, c in enumerate(image_coords):
+            padded_idx = str(idx).zfill(3)
             dep = np.linalg.norm(coord - c, axis=-1)
 
             if idx < 100:
@@ -118,7 +119,7 @@ def load_st3d_data(baseDir: str, stage=0):
                 
                 # the augmented equirects may have occluded regions
                 # so we mask them out
-                mask = np.asarray(Image.open(os.path.join(baseDir, 'rm_occluded', 'mask_%d.png' % idx))).copy() / 255
+                mask = np.asarray(Image.open(os.path.join(baseDir, 'rm_occluded', f'mask_{padded_idx}.png'))).copy() / 255
 
                 batch.o.append(np.repeat(c.reshape(1, -1), (mask>0).sum(), axis=0))
                 batch.d.append(dir[mask>0])
@@ -135,7 +136,7 @@ def load_st3d_data(baseDir: str, stage=0):
             elif idx < 110:
                 batch_test.o.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
                 batch_test.d.append(original_coord.reshape(-1, 3))
-                batch_test.rgb.append(np.asarray(Image.open(os.path.join(baseDir, 'test', 'rgb_{}.png'.format(idx - 100)))).reshape(-1, 3))
+                batch_test.rgb.append(np.asarray(Image.open(os.path.join(baseDir, 'test', f'rgb_{str(idx - 100).zfill(3)}.png'))).reshape(-1, 3))
                 batch_test.depth.append(dep.reshape(-1))
 
                 # rays_o_test.append(np.repeat(c.reshape(1, -1), H*W, axis=0))

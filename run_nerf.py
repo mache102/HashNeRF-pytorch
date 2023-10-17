@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from run_nerf_helpers import *
+from create_nerf import create_nerf
 from ray_util import *
 from loss import sigma_sparsity_loss, total_variation_loss
 
