@@ -96,3 +96,10 @@ def shuffle_rays(rays):
             rays.__dict__[key] = value[rand_idx]
 
     return rays
+
+
+def to_8b(x):
+    return (255 * np.clip(x, 0, 1)).astype(np.uint8)
+
+def psnr(pred_img, gt_img):
+    return -10. * np.log10(np.mean(np.square(pred_img - gt_img)))

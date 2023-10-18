@@ -2,7 +2,7 @@
 expname = 03122_554516
 basedir = ./logs
 datadir = ./data/03122_554516
-dataset_type = st3d
+dataset_type = equirect
 
 N_rand = 1400
 N_samples = 64

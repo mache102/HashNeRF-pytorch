@@ -20,7 +20,7 @@ def create_nerf(args):
     """
     step 1: create embedding functions
 
-    TODO: how to create embed for st3d + hash?
+    TODO: how to create embed for equirect + hash?
     """
     embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
     if args.i_embed==1:
@@ -152,7 +152,7 @@ def create_nerf(args):
     }
 
     # NDC only good for LLFF-style forward facing data
-    if (args.dataset_type not in ['llff', 'st3d']) or args.no_ndc:
+    if (args.dataset_type not in ['llff', 'equirect']) or args.no_ndc:
         print('Not ndc!')
         render_kwargs_train['ndc'] = False
         render_kwargs_train['lindisp'] = args.lindisp

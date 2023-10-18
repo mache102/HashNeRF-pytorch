@@ -1,6 +1,4 @@
-import configargparse
 import imageio
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pdb
@@ -11,8 +9,6 @@ from tqdm import tqdm, trange
 from typing import List, Tuple, Dict, Optional
 
 import torch
-import torch.nn.functional as F
-from torch.distributions import Categorical
 
 from run_nerf_helpers import *
 from create_nerf import create_nerf
@@ -24,157 +20,21 @@ from load.load_deepvoxels import load_dv_data
 from load.load_blender import load_blender_data
 from load.load_scannet import load_scannet_data
 from load.load_LINEMOD import load_LINEMOD_data
-from load.load_st3d import load_st3d_data
+from load.load_equirect import load_equirect_data
 
-from util import create_expname, all_to_tensor, shuffle_rays
+from util import create_expname, all_to_tensor, shuffle_rays, to_8b
+from parse_args import config_parser
 
 # 20231010 15:25
 np.random.seed(0)
 DEBUG = False
 
-def config_parser():
-
-    parser = configargparse.ArgumentParser()
-    parser.add_argument('--config', is_config_file=True,
-                        help='config file path')
-    parser.add_argument("--expname", type=str,
-                        help='experiment name')
-    parser.add_argument("--basedir", type=str, default='./logs/',
-                        help='where to store ckpts and logs')
-    parser.add_argument("--datadir", type=str, default='./data/llff/fern',
-                        help='input data directory')
-
-    # training options
-    parser.add_argument("--netdepth", type=int, default=8,
-                        help='layers in network')
-    parser.add_argument("--netwidth", type=int, default=256,
-                        help='channels per layer')
-    parser.add_argument("--netdepth_fine", type=int, default=8,
-                        help='layers in fine network')
-    parser.add_argument("--netwidth_fine", type=int, default=256,
-                        help='channels per layer in fine network')
-    parser.add_argument("--N_rand", type=int, default=32*32*4,
-                        help='batch size (number of random rays per gradient step)')
-    parser.add_argument("--lrate", type=float, default=5e-4,
-                        help='learning rate')
-    parser.add_argument("--lrate_decay", type=int, default=250,
-                        help='exponential learning rate decay (in 1000 steps)')
-    parser.add_argument("--chunk", type=int, default=1024*32,
-                        help='number of rays processed in parallel, decrease if running out of memory')
-    parser.add_argument("--net_chunk", type=int, default=1024*64,
-                        help='number of pts sent through network in parallel, decrease if running out of memory')
-    parser.add_argument("--no_batching", action='store_true',
-                        help='only take random rays from 1 image at a time')
-    parser.add_argument("--no_reload", action='store_true',
-                        help='do not reload weights from saved ckpt')
-    parser.add_argument("--ft_path", type=str, default=None,
-                        help='specific weights npy file to reload for coarse network')
-
-    # rendering options
-    parser.add_argument("--N_samples", type=int, default=64,
-                        help='number of coarse samples per ray')
-    parser.add_argument("--N_importance", type=int, default=0,
-                        help='number of additional fine samples per ray')
-    parser.add_argument("--perturb", type=float, default=1.,
-                        help='set to 0. for no jitter, 1. for jitter')
-    parser.add_argument("--use_viewdirs", action='store_true',
-                        help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=int, default=1,
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
-    parser.add_argument("--i_embed_views", type=int, default=2,
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
-    parser.add_argument("--multires", type=int, default=10,
-                        help='log2 of max freq for positional encoding (3D location)')
-    parser.add_argument("--multires_views", type=int, default=4,
-                        help='log2 of max freq for positional encoding (2D direction)')
-    parser.add_argument("--raw_noise_std", type=float, default=0.,
-                        help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
-
-    parser.add_argument("--render_only", action='store_true',
-                        help='do not optimize, reload weights and render out render_poses path')
-    parser.add_argument("--render_test", action='store_true',
-                        help='render the test set instead of render_poses path')
-    parser.add_argument("--render_factor", type=int, default=0,
-                        help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
-
-    # training options
-    parser.add_argument("--precrop_iters", type=int, default=0,
-                        help='number of steps to train on central crops')
-    parser.add_argument("--precrop_frac", type=float,
-                        default=.5, help='fraction of img taken for central crops')
-
-    # dataset options
-    parser.add_argument("--dataset_type", type=str, default='llff',
-                        help='options: llff / blender / deepvoxels / st3d / multi_mp3d')
-    parser.add_argument("--testskip", type=int, default=8,
-                        help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
-
-    ## deepvoxels flags
-    parser.add_argument("--shape", type=str, default='greek',
-                        help='options : armchair / cube / greek / vase')
-
-    ## blender flags
-    parser.add_argument("--white_bkgd", action='store_true',
-                        help='set to render synthetic data on a white bkgd (always use for dvoxels)')
-    parser.add_argument("--half_res", action='store_true',
-                        help='load blender synthetic data at 400x400 instead of 800x800')
-
-    ## scannet flags
-    parser.add_argument("--scannet_sceneID", type=str, default='scene0000_00',
-                        help='sceneID to load from scannet')
-
-    ## llff flags
-    parser.add_argument("--factor", type=int, default=8,
-                        help='downsample factor for LLFF images')
-    parser.add_argument("--no_ndc", action='store_true',
-                        help='do not use normalized device coordinates (set for non-forward facing scenes)')
-    parser.add_argument("--lindisp", action='store_true',
-                        help='sampling linearly in disparity rather than depth')
-    parser.add_argument("--spherify", action='store_true',
-                        help='set for spherical 360 scenes')
-    parser.add_argument("--llffhold", type=int, default=8,
-                        help='will take every 1/N images as LLFF test set, paper uses 8')
-
-    ## st3d flags
-    # use_depth:
-    # use_gradient:
-    # stage: used only in load_st3d_data
-    parser.add_argument("--use_depth", action='store_true', 
-                        help='use depth to update')
-    parser.add_argument("--use_gradient", action='store_true', 
-                        help='use gradient to update')
-    parser.add_argument("--stage", type=int, default=0,
-                        help='use iterative training by defining stage, if 0: don\'t use')
-
-
-    # logging/saving options
-    parser.add_argument("--i_print",   type=int, default=100,
-                        help='frequency of console printout and metric loggin')
-    parser.add_argument("--i_img",     type=int, default=500,
-                        help='frequency of tensorboard image logging')
-    parser.add_argument("--i_weights", type=int, default=10000,
-                        help='frequency of weight ckpt saving')
-    parser.add_argument("--i_testset", type=int, default=1000,
-                        help='frequency of testset saving')
-    parser.add_argument("--i_video",   type=int, default=5000,
-                        help='frequency of render_poses video saving')
-
-    parser.add_argument("--finest_res",   type=int, default=512,
-                        help='finest resolultion for hashed embedding')
-    parser.add_argument("--log2_hashmap_size",   type=int, default=19,
-                        help='log2 of hashmap size')
-    parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
-                        help='learning rate')
-    parser.add_argument("--tv-loss-weight", type=float, default=1e-6,
-                        help='learning rate')
-
-    return parser
-
-def eval_test_omninerf(H, W, savedir: str, rays_test, render_kwargs_test: Dict):
+def eval_test_omninerf(renderer, savedir: str, rays_test, render_kwargs_test: Dict):
     os.makedirs(savedir, exist_ok=True)
     with torch.no_grad():
-        rgbs, _ = render_path([rays_test.o, rays_test.d], [H, W], render_kwargs=render_kwargs_test, 
-                              args=args, chunk=None, savedir=savedir, render_factor=args.render_factor)
+        rgbs, _ = renderer.render_path([rays_test.o, rays_test.d], 
+                                       render_kwargs=render_kwargs_test, 
+                            savedir=savedir, render_factor=args.render_factor)
     print('Done rendering', savedir)
     
     # calculate MSE and PSNR for last image(gt pose)
@@ -185,7 +45,7 @@ def eval_test_omninerf(H, W, savedir: str, rays_test, render_kwargs_test: Dict):
         f.write('loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
     
     rgbs = np.concatenate([rgbs[:-1],rgbs[:-1][::-1]])
-    imageio.mimwrite(os.path.join(savedir, 'video2.gif'), to8b(rgbs), duration=1000//10)
+    imageio.mimwrite(os.path.join(savedir, 'video2.gif'), to_8b(rgbs), duration=1000//10)
     print('Saved test set')   
    
 def main():
@@ -210,13 +70,9 @@ def main():
     """
     K = None
     # Load data
-    if args.dataset_type == 'st3d':
-        rays, rays_test, H, W = load_st3d_data(args.datadir, args.stage)
-        # rays_o, rays_d, rays_g, rays_rgb, rays_depth, hw = load_st3d_data(args.datadir, args.stage)
-        # rays_o, rays_o_test = rays_o
-        # rays_d, rays_d_test = rays_d
-        # rays_rgb, rays_rgb_test = rays_rgb
-        # rays_depth, rays_depth_test = rays_depth
+    if args.dataset_type == 'equirect':
+        rays, rays_test, H, W = load_equirect_data(args.datadir, args.stage)
+
         near, far = 0.0, 2.0
         print(f"Near Far bounds are: {near}, {far}")
         args.bounding_box = (torch.tensor([-1.5, -1.5, -1.0]), torch.tensor([1.5, 1.5, 1.0]))
@@ -307,12 +163,12 @@ def main():
     (and convert poses into np array)
     that's about it
 
-    st3d has rays batch (origin,direction,rgb,depth,gradient)
+    equirect has rays batch (origin,direction,rgb,depth,gradient)
     directly 
     whereas other datasets have images and poses
     (rays to be obtained from poses)
     """
-    if args.dataset_type != 'st3d':
+    if args.dataset_type != 'equirect':
         # Cast intrinsics to right types
         H, W, focal = hwf
         H, W = int(H), int(W)
@@ -363,13 +219,23 @@ def main():
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
-    if args.dataset_type != 'st3d':
-        # Move testing data to GPU
-        render_poses = torch.Tensor(render_poses).to(device)
-    else:
+    if args.dataset_type == 'equirect':
         # all to tensor
         rays = shuffle_rays(all_to_tensor(rays, device))
         rays_test = all_to_tensor(rays_test, device)
+
+        renderer = VolRenderer(dataset_type=args.dataset_type, h=H, w=W, 
+                               proc_chunk=args.chunk, near=near, far=far, 
+                               use_viewdirs=args.use_viewdirs)
+
+    else:
+        # Move testing data to GPU
+        render_poses = torch.Tensor(render_poses).to(device)
+
+        renderer = VolRenderer(dataset_type=args.dataset_type, h=H, w=W,
+                               focal=focal, k=K, 
+                               proc_chunk=args.chunk, near=near, far=far, 
+                               use_viewdirs=args.use_viewdirs)
     """
     Skip to render only
     """
@@ -378,13 +244,13 @@ def main():
     if args.render_only:
         print('RENDER ONLY')
         with torch.no_grad():
-            if args.dataset_type == 'st3d':
+            if args.dataset_type == 'equirect':
                 if args.stage > 0:
                     testsavedir = os.path.join(savepath, 'renderonly_stage_{}_{:06d}'.format(args.stage, start))
                 else:
                     testsavedir = os.path.join(savepath, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', start))
 
-                eval_test_omninerf(H, W, savedir=testsavedir, rays_test=rays_test, 
+                eval_test_omninerf(renderer, savedir=testsavedir, rays_test=rays_test, 
                                    render_kwargs_test=render_kwargs_test)
             else:
                 if args.render_test:
@@ -398,26 +264,25 @@ def main():
                 os.makedirs(testsavedir, exist_ok=True)
                 print('test poses shape', render_poses.shape)
 
-                rgbs, _ = render_path(render_poses, hwf, K=K, render_kwargs=render_kwargs_test, args=args, 
-                                      chunk=args.chunk, gt_imgs=images, savedir=testsavedir, 
-                                      render_factor=args.render_factor)
+                rgbs, _ = renderer.render_path(render_poses, render_kwargs=render_kwargs_test, 
+                            gt_imgs=images, savedir=testsavedir, 
+                            render_factor=args.render_factor)
                 print('Done rendering', testsavedir)
-                imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), duration=1000//30, quality=8)
+                imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to_8b(rgbs), duration=1000//30, quality=8)
 
             return
 
     """
     Prepare raybatch tensor if batching random rays
     """
-    if args.dataset_type == 'st3d':
+    if args.dataset_type == 'equirect':
         # Prepare raybatch tensor if batching random rays
         N_rand = args.N_rand
         i_batch = 0
-        N_iters = 200000 + 1
         start = start + 1
         print('Begin, iter: %d' % start)
 
-        for i in trange(start, N_iters):
+        for i in trange(start, args.N_iters):
             time0 = time.time()
             
             batch_o = rays.o[i_batch:i_batch+N_rand]
@@ -434,8 +299,8 @@ def main():
                 i_batch = 0
 
             #####  Core optimization loop  #####
-
-            rgb, dep, grad, extras = render(H, W, rays=[batch_o, batch_d], **render_kwargs_train, ndc=False)
+            rays, reshape_to = renderer.prepare_rays(rays=[batch_o, batch_d], ndc=False)
+            rgb, dep, grad, extras = renderer.render(rays=rays, **render_kwargs_train)
 
             optimizer.zero_grad()
             # import pdb; pdb.set_trace()
@@ -526,13 +391,12 @@ def main():
 
             i_batch = 0
 
-        # Move training data to GPU
-        if use_batching:
             images = torch.Tensor(images).to(device)
             rays_rgb = torch.Tensor(rays_rgb).to(device)
+
+            
         poses = torch.Tensor(poses).to(device)
 
-        N_iters = 50000 + 1
         print('Start Training')
         print('TRAIN views are', i_train)
         print('TEST views are', i_test)
@@ -544,7 +408,7 @@ def main():
         start = start + 1
         time0 = time.time()
 
-        for i in trange(start, N_iters):
+        for i in trange(start, args.N_iters):
             # Sample random ray batch
             # omninerf assumes use batching
             if use_batching:
@@ -611,9 +475,9 @@ def main():
                     target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
             #####  Core optimization loop  #####
-            rgb, depth, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
-                                                    verbose=i < 10, retraw=True,
-                                                    **render_kwargs_train)
+            rays, reshape_to = renderer.prepare_rays(rays=batch_rays, ndc=False)
+            rgb, depth, acc, extras = renderer.render(rays=rays, verbose=i < 10, retraw=True,
+                                            **render_kwargs_train)
 
             optimizer.zero_grad()
             img_loss = img2mse(rgb, target_s)
@@ -691,13 +555,12 @@ def main():
             if i%args.i_video==0 and i > 0:
                 # Turn on testing mode
                 with torch.no_grad():
-                    rgbs, disps = render_path(render_poses, hwf, K=K, 
-                                              render_kwargs=render_kwargs_test, 
-                                              args=args, chunk=args.chunk)
+                    rgbs, disps = renderer.render_path(render_poses,
+                                              render_kwargs=render_kwargs_test)
                 print('Done, saving', rgbs.shape, disps.shape)
                 moviebase = os.path.join(savepath, '{}_spiral_{:06d}_'.format(expname, i))
-                imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), duration=1000//30, quality=8)
-                imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), duration=1000//30, quality=8)
+                imageio.mimwrite(moviebase + 'rgb.mp4', to_8b(rgbs), duration=1000//30, quality=8)
+                imageio.mimwrite(moviebase + 'disp.mp4', to_8b(disps / np.max(disps)), duration=1000//30, quality=8)
 
             """
             RENDER TEST SET
@@ -707,9 +570,8 @@ def main():
                 os.makedirs(testsavedir, exist_ok=True)
                 print('test poses shape', poses[i_test].shape)
                 with torch.no_grad():
-                    render_path(torch.Tensor(poses[i_test]).to(device), hwf, K=K,
-                                render_kwargs=render_kwargs_test, args=args,
-                                chunk=args.chunk, gt_imgs=images[i_test], 
+                    renderer.render_path(torch.Tensor(poses[i_test]).to(device), 
+                                render_kwargs=render_kwargs_test, gt_imgs=images[i_test], 
                                 savedir=testsavedir)
                 print('Saved test set')
 
@@ -737,6 +599,7 @@ if __name__=='__main__':
 
     parser = config_parser()
     args = parser.parse_args()
+    args.N_iters += 1
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

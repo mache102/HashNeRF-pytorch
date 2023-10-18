@@ -3,366 +3,395 @@ import numpy as np
 import os
 import pdb
 import pickle
-import time
 import imageio
 
-from tqdm import tqdm
+from tqdm import trange
 
 import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from ray_util import get_rays, get_ndc_rays
+from util import to_8b, psnr
 
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
-to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
 DEBUG = False
-"""
-render_path():
-    ...
-    for each pose 
-        ...
-        render():
-            ...
-            get_rays()
-            get_ndc_rays()
-            ...
-            for each chunk of rays_flat
-                render_rays():
-                    network_query_fn() == run_network():
-                        batchify()
-                    ...
-                    raw2outputs()
-                    sample_pdf()
-                    raw2outputs()
-"""
-
-def render_path(render_poses, hwf, render_kwargs, args, K=None, chunk=None, gt_imgs=None, savedir=None, render_factor=0):
+class VolRenderer:
     """
-    Rendering for test set
+    Volumetric rendering (nerf evaulation)
     """
+    def __init__(self, dataset_type: str, 
+                 h: int, w: int, focal: float = None, k: np.ndarray = None,
+                 proc_chunk: int = 1024*32, near: float = 0., far: float = 1.,
+                 use_viewdirs: bool = False):
+        """
+        h: height of image in pixels
+        w: width of image in pixels
+        focal: focal length of pinhole camera
 
-    """
-    preproc (get hwf, render factor, etc)
-    """
-    dataset_type = args.dataset_type
-    if len(hwf) == 3:
-        H, W, focal = hwf
-    else:
-        H, W = hwf
-        focal = None
-    near, far = render_kwargs['near'], render_kwargs['far']
+        proc_chunk: max number of rays to process simultaneously. 
+            prevent OOM, does not affect final results
+        near, far: ray distances
+        use_viewdirs: bool. If True, use viewing direction of a point in space in model.
 
-    if render_factor!=0:
-        # Render downsampled for speed
-        H = H//render_factor
-        W = W//render_factor
-        if focal is not None:
-            focal = focal/render_factor
+        args: arguments
+        """     
+        self.dataset_type = dataset_type
 
-    rgbs = []
-    depths = []
+        self.h = h
+        self.w = w
+        self.focal = focal
 
-    """
-    rendering pipeline for equirect and standard rectilinear options
+        if k is None:
+            self.k = np.array([
+                [focal, 0, 0.5 * w],
+                [0, focal, 0.5 * h],
+                [0, 0, 1]
+            ])
+        else:
+            self.k = k
 
-    (most operations take place in render() and its called funcs)
-    """
-    if dataset_type == "st3d":
-        rays_o, rays_d = render_poses
-        t = time.time()
-        batch = H*W
+        self.proc_chunk = proc_chunk
+        self.near = near
+        self.far = far
+        self.use_viewdirs = use_viewdirs
+
+    def save_imgs(self, rgb, depth, savedir, i,
+                  method="imageio"):
+        """
+        save rgb and depth as a figure
+        """
+        if method == "imageio":
+            fn = os.path.join(savedir, f'rgb_{i:03d}.png')
+            imageio.imwrite(fn, to_8b(rgb))
         
-        for i in tqdm(range(rays_o.shape[0] // batch)):
-            print(i, time.time() - t)
-            t = time.time()
-            rgb, dep, grad,  _ = render(H, W, rays=[rays_o[i*batch:(i+1)*batch], rays_d[i*batch:(i+1)*batch]], **render_kwargs, ndc=False)
-            if i==0:
-                print(rgb.shape, dep.shape)
-
-            if savedir is not None:
-                rgb8 = rgb.reshape(H, W, 3).cpu().numpy()
-                rgbs.append(rgb8)
-                
-                filename = os.path.join(savedir, '{:03d}.png'.format(i))
-                imageio.imwrite(filename, to8b(rgb8))
-                
-                dep8 = dep.reshape(H, W).cpu().numpy()
-                depths.append(dep8)
-                filename = os.path.join(savedir, 'd_{:03d}.png'.format(i))
-                
-                imageio.imwrite(filename, to8b(dep8))            
+            fn = os.path.join(savedir, f'd_{i:03d}.png')
+            imageio.imwrite(fn, to_8b(depth))     
         
+        elif method == "matplotlib":
+            # save rgb and depth as a figure
+            fig = plt.figure(figsize=(25, 15))
+            ax = fig.add_subplot(1, 2, 1)
+            rgb = to_8b(rgb)
+            ax.imshow(rgb)
+            ax.axis('off')
+            ax = fig.add_subplot(1, 2, 2)
+            ax.imshow(depth, cmap='plasma', vmin=0, vmax=1)
+            ax.axis('off')
+
+            fn = os.path.join(savedir, f'{i:03d}.png')
+            plt.savefig(fn, bbox_inches='tight', pad_inches=0)
+            plt.close(fig)
+        else:
+            raise NotImplementedError
+
+    def render_path(self, poses, render_kwargs,
+                    gt_imgs=None, savedir=None, render_factor = 1):
+        """
+        Rendering for test set
+        """
+        h = self.h * render_factor
+        w = self.w * render_factor
+
+        rgbs = []
+        depths = []
+
+        """
+        rendering pipeline for equirect and standard rectilinear options
+
+        (most operations take place in render() and its called funcs)
+        """
+        if self.dataset_type == "equirect":
+            """
+            equirectangular datasets
+            """
+            rays_o, rays_d = poses
+            batch = h * w    
+            for i in trange(rays_o.shape[0] // batch):
+                start = i * batch
+                end = (i + 1) * batch
+                rays, reshape_to = self.prepare_rays(rays=[rays_o[start:end], 
+                                                           rays_d[start:end]], 
+                                                     ndc=False)
+                rgb, depth, _, _ = \
+                    self.render(rays=rays, reshape_to=reshape_to,
+                                **render_kwargs)
+                
+                if i == 0:
+                    print(rgb.shape, depth.shape)
+                rgb = rgb.reshape(h, w, 3).cpu().numpy()
+                rgbs.append(rgb)
+
+                depth = depth.reshape(h, w).cpu().numpy()
+                depths.append(depth)
+
+                if savedir is not None:
+                    self.save_imgs(rgb, depth, savedir, i)
         
-        rgbs = np.stack(rgbs, 0)
-        depths = np.stack(depths, 0) 
-    else:
-        psnrs = []
+            rgbs = np.stack(rgbs, 0)
+            depths = np.stack(depths, 0) 
 
-        t = time.time()
-        for i, c2w in enumerate(tqdm(render_poses)):
-            print(i, time.time() - t)
-            t = time.time()
-            rgb, depth, acc, _ = render(H, W, K=K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        else:
+            """
+            Non equirectangular datasets
+            """
+            psnrs = []
+            for i in trange(len(poses)):
+                c2w = poses[i]
 
-            rgbs.append(rgb.cpu().numpy())
-            # normalize depth to [0,1]
-            depth = (depth - near) / (far - near)
-            depths.append(depth.cpu().numpy())
-            if i==0:
-                print(rgb.shape, depth.shape)
+                rgb, depth, _, _ = \
+                    self.render(*self.prepare_rays(c2w=c2w[:3,:4]), **render_kwargs)
+                if i == 0:
+                    print(rgb.shape, depth.shape)
 
-            if gt_imgs is not None and render_factor==0:
-                try:
-                    gt_img = gt_imgs[i].cpu().numpy()
-                except:
-                    gt_img = gt_imgs[i]
-                p = -10. * np.log10(np.mean(np.square(rgb.cpu().numpy() - gt_img)))
-                print(p)
-                psnrs.append(p)
+                rgb = rgb.cpu().numpy()
+                rgbs.append(rgb)
+                depth = ((depth - self.near) / (self.far - self.near)).cpu().numpy()
+                depths.append(depth)
 
-            if savedir is not None:
-                # save rgb and depth as a figure
-                fig = plt.figure(figsize=(25,15))
-                ax = fig.add_subplot(1, 2, 1)
-                rgb8 = to8b(rgbs[-1])
-                ax.imshow(rgb8)
-                ax.axis('off')
-                ax = fig.add_subplot(1, 2, 2)
-                ax.imshow(depths[-1], cmap='plasma', vmin=0, vmax=1)
-                ax.axis('off')
-                filename = os.path.join(savedir, '{:03d}.png'.format(i))
-                # save as png
-                plt.savefig(filename, bbox_inches='tight', pad_inches=0)
-                plt.close(fig)
-                # imageio.imwrite(filename, rgb8)
+                if gt_imgs is not None and render_factor == 1:
+                    try:
+                        gt_img = gt_imgs[i].cpu().numpy()
+                    except:
+                        gt_img = gt_imgs[i]
+                    
+                    p = psnr(rgb, gt_img)
+                    psnrs.append(p)
 
+                if savedir is not None:
+                    self.save_imgs(rgb, depth, savedir, i)         
 
-        rgbs = np.stack(rgbs, 0)
-        depths = np.stack(depths, 0)
-        if gt_imgs is not None and render_factor==0:
-            avg_psnr = sum(psnrs)/len(psnrs)
-            print("Avg PSNR over Test set: ", avg_psnr)
-            with open(os.path.join(savedir, "test_psnrs_avg{:0.2f}.pkl".format(avg_psnr)), "wb") as fp:
-                pickle.dump(psnrs, fp)
+            rgbs = np.stack(rgbs, 0)
+            depths = np.stack(depths, 0)
 
-    return rgbs, depths
+            if gt_imgs is not None and render_factor == 1:
+                avg_psnr = sum(psnrs)/len(psnrs)
+                print("Avg PSNR over Test set: ", avg_psnr)
+                with open(os.path.join(savedir, "test_psnrs_avg{:0.2f}.pkl".format(avg_psnr)), "wb") as fp:
+                    pickle.dump(psnrs, fp)
 
+        return rgbs, depths
 
-def render(H, W, focal=None, K=None, chunk=1024*32, rays=None, c2w=None, ndc=True,
-                  near=0., far=1.,
-                  use_viewdirs=False, c2w_staticcam=None,
-                  **kwargs):
-    """
-    Main ray rendering function
-    ====
+    def prepare_rays(self, rays = None, c2w = None,
+            ndc: bool = True, c2w_staticcam = None):
+        """
+        Prepare rays for rendering in batches
+        """
+        if c2w is not None:
+            # special case to render full image
+            rays_o, rays_d = get_rays(self.h, self.w, c2w, 
+                                      focal=self.focal, K=self.k)
+        else:
+            # use provided ray batch
+            rays_o, rays_d = rays
 
-    ====
-    Args:
-      H: int. Height of image in pixels.
-      W: int. Width of image in pixels.
-      focal: float. Focal length of pinhole camera.
-      chunk: int. Maximum number of rays to process simultaneously. Used to
-        control maximum memory usage. Does not affect final results.
-      rays: array of shape [2, batch_size, 3]. Ray origin and direction for
-        each example in batch.
-      c2w: array of shape [3, 4]. Camera-to-world transformation matrix.
-      ndc: bool. If True, represent ray origin, direction in NDC coordinates.
-      near, far: ray distances
-      use_viewdirs: bool. If True, use viewing direction of a point in space in model.
-      c2w_staticcam: array of shape [3, 4]. If not None, use this transformation matrix for
-       camera while using other c2w argument for viewing directions.
-       
-    Returns:
-      rgb_map: [batch_size, 3]. Predicted RGB values for rays.
-      disp_map: [batch_size]. Disparity map. Inverse of depth.
-      acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
-      extras: dict with everything returned by render_rays().
-    """
-    if c2w is not None:
-        # special case to render full image
-        rays_o, rays_d = get_rays(H, W, c2w, focal=focal, K=K)
-    else:
-        # use provided ray batch
-        rays_o, rays_d = rays
+        # use viewdirs (rays_d)
+        if self.use_viewdirs:
+            # provide ray directions as input
+            viewdirs = rays_d
+            if c2w_staticcam is not None:
+                # special case to visualize effect of viewdirs
+                rays_o, rays_d = get_rays(self.h, self.w, c2w_staticcam, focal=self.focal, K=self.k)
+            viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
+            viewdirs = viewdirs.reshape(-1,3).float()
 
-    if use_viewdirs:
-        # provide ray directions as input
-        viewdirs = rays_d
-        if c2w_staticcam is not None:
-            # special case to visualize effect of viewdirs
-            rays_o, rays_d = get_rays(H, W, c2w_staticcam, focal=focal, K=K)
-        viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
-        viewdirs = torch.reshape(viewdirs, [-1,3]).float()
+        # we take note of the rays' shape 
+        # prior to flattening 
+        # for reshaping later
+        sh = rays_d.shape # [..., 3]
+        
+        # normalized device coordinates, for forward facing scenes
+        if ndc:
+            rays_o, rays_d = get_ndc_rays(self.h, self.w, focal=self.k[0][0], 
+                                          near=1., rays_o=rays_o, rays_d=rays_d)
 
-    sh = rays_d.shape # [..., 3]
-    if ndc:
-        # for forward facing scenes
-        rays_o, rays_d = get_ndc_rays(H, W, K[0][0], 1., rays_o, rays_d)
+        # Create ray batch
+        # (N, 3)
+        rays_o = rays_o.reshape(-1,3).float()
+        rays_d = rays_d.reshape(-1,3).float()
 
-    # Create ray batch
-    # (N, 3)
-    rays_o = torch.reshape(rays_o, [-1,3]).float()
-    rays_d = torch.reshape(rays_d, [-1,3]).float()
+        near, far = self.near * torch.ones_like(rays_d[...,:1]), self.far * torch.ones_like(rays_d[...,:1])
+        rays = torch.cat([rays_o, rays_d, near, far], -1)
+        if self.use_viewdirs:
+            rays = torch.cat([rays, viewdirs], -1)
 
-    near, far = near * torch.ones_like(rays_d[...,:1]), far * torch.ones_like(rays_d[...,:1])
-    rays = torch.cat([rays_o, rays_d, near, far], -1)
-    if use_viewdirs:
-        rays = torch.cat([rays, viewdirs], -1)
+        return rays, list(sh[:-1])
 
-    # Render and reshape
-    # all_ret = batchify_rays(rays, chunk, **kwargs)
-    """
-    Render rays in smaller minibatches to avoid OOM.
-    """
-    all_ret = {}
-    for i in range(0, rays.shape[0], chunk):
-        ret = render_rays(rays[i:i+chunk], **kwargs)
+    def render(self, rays, reshape_to, **kwargs):
+
+        """
+        Main ray rendering function
+
+        Args:
+        rays: array of shape [2, batch_size, 3]. Ray origin and direction for
+            each example in batch.
+        c2w: array of shape [3, 4]. Camera-to-world transformation matrix.
+        ndc: bool. If True, represent ray origin, direction in NDC coordinates.
+        c2w_staticcam: array of shape [3, 4]. If not None, use this transformation matrix for
+        camera while using other c2w argument for viewing directions.
+        
+        Returns:
+        rgb_map: [batch_size, 3]. Predicted RGB values for rays.
+        disp_map: [batch_size]. Disparity map. Inverse of depth.
+        acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
+        extras: dict with everything returned by render_rays().
+        """
+        
+        # Render and reshape
+        """
+        Render rays in smaller minibatches to avoid OOM.
+        """
+        render_outputs = {}
+        for i in range(0, rays.shape[0], self.proc_chunk):
+            chunk_output = self.render_rays(rays[i:i + self.proc_chunk], **kwargs)
+
+            for k in chunk_output:
+                if k not in render_outputs:
+                    render_outputs[k] = []
+                render_outputs[k].append(chunk_output[k])
+        render_outputs = {k : torch.cat(render_outputs[k], 0) for k in render_outputs}
+
+        for k in render_outputs:
+            k_sh = reshape_to + list(render_outputs[k].shape[1:])
+            render_outputs[k] = torch.reshape(render_outputs[k], k_sh)
+
+        k_extract = ['rgb_map', 'depth_map', 'acc_map']
+        return_priority = [render_outputs[k] for k in k_extract]
+        ret_dict = {k: render_outputs[k] for k in render_outputs if k not in k_extract}
+        return return_priority + [ret_dict]
+
+    def render_rays(self, rays,
+                    network_fn,
+                    network_query_fn,
+                    N_samples,
+                    embed_fn=None,
+                    retraw=False,
+                    lindisp=False,
+                    perturb=0.,
+                    N_importance=0,
+                    network_fine=None,
+                    white_bkgd=False,
+                    raw_noise_std=0.,
+                    verbose=False,
+                    seed: int = None):
+        """Volumetric rendering.
+        Args:
+        rays: array of shape [batch_size, ...]. All information necessary
+            for sampling along a ray, including: ray origin, ray direction, min
+            dist, max dist, and unit-magnitude viewing direction.
+        network_fn: function. Model for predicting RGB and density at each point
+            in space.
+        network_query_fn: function used for passing queries to network_fn.
+        N_samples: int. Number of different times to sample along each ray.
+        retraw: bool. If True, include model's raw, unprocessed predictions.
+        lindisp: bool. If True, sample linearly in inverse depth rather than in depth.
+        perturb: float, 0 or 1. If non-zero, each ray is sampled at stratified
+            random points in time.
+        N_importance: int. Number of additional times to sample along each ray.
+            These samples are only passed to network_fine.
+        network_fine: "fine" network with same spec as network_fn.
+        white_bkgd: bool. If True, assume a white background.
+        raw_noise_std: ...
+        verbose: bool. If True, print more debugging info.
+        Returns:
+        rgb_map: [num_rays, 3]. Estimated RGB color of a ray. Comes from fine model.
+        disp_map: [num_rays]. Disparity map. 1 / depth.
+        acc_map: [num_rays]. Accumulated opacity along each ray. Comes from fine model.
+        raw: [num_rays, num_samples, 4]. Raw predictions from model.
+        rgb0: See rgb_map. Output for coarse model.
+        disp0: See disp_map. Output for coarse model.
+        acc0: See acc_map. Output for coarse model.
+        z_std: [num_rays]. Standard deviation of distances along ray for each
+            sample.
+        """
+
+        """
+        RAY BATCH
+        Shape: (chunk_size, 8) or (chunk_size, 11) (if use_viewdirs)
+
+        0:3 - ray origin
+        3:6 - ray direction
+        6:8 - near and far bounds
+        8:11 (if use_viewdirs) - viewing direction
+        """
+        if seed:
+            torch.manual_seed(0)
+
+        N_rays = rays.shape[0]
+        rays_o, rays_d = rays[:,0:3], rays[:,3:6] # [N_rays, 3] each
+        viewdirs = rays[:,-3:] if rays.shape[-1] > 8 else None
+        bounds = torch.reshape(rays[...,6:8], [-1,1,2]) # (chunk_size, 1, 2)
+        near, far = bounds[...,0], bounds[...,1] # [-1,1]
+
+        t_vals = torch.linspace(0., 1., steps=N_samples)
+        if not lindisp:
+            z_vals = near * (1.-t_vals) + far * (t_vals)
+        else:
+            z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
+
+        # z_vals is now of shape (N_rays, N_samples)
+        z_vals = z_vals.expand([N_rays, N_samples])
+
+        if perturb > 0.:
+            # get intervals between samples
+            mids = .5 * (z_vals[...,1:] + z_vals[...,:-1])
+            upper = torch.cat([mids, z_vals[...,-1:]], -1)
+            lower = torch.cat([z_vals[...,:1], mids], -1)
+            # stratified samples in those intervals
+            t_rand = torch.rand(z_vals.shape)
+
+            z_vals = lower + (upper - lower) * t_rand
+
+        pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
+
+        raw = network_query_fn(pts, viewdirs, network_fn)
+        rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = \
+            raw2outputs(raw, z_vals, rays_d, 
+                        raw_noise_std, white_bkgd, seed=seed)
+
+        if N_importance > 0:
+
+            rgb_map_0, depth_map_0, acc_map_0, sparsity_loss_0 = rgb_map, depth_map, acc_map, sparsity_loss
+
+            z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
+            z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, 
+                                det=(perturb==0.), seed=seed)
+            z_samples = z_samples.detach()
+
+            z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
+            pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
+
+            run_fn = network_fn if network_fine is None else network_fine
+            raw = network_query_fn(pts, viewdirs, run_fn)
+
+            rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = \
+                raw2outputs(raw, z_vals, rays_d, 
+                            raw_noise_std, white_bkgd, seed=seed)
+
+        ret = {
+            'rgb_map': rgb_map, 
+            'depth_map': depth_map, 
+            'acc_map': acc_map, 
+            'sparsity_loss': sparsity_loss
+        }
+
+        if retraw:
+            ret['raw'] = raw
+        if N_importance > 0:
+            ret['rgb0'] = rgb_map_0
+            ret['depth0'] = depth_map_0
+            ret['acc0'] = acc_map_0
+            ret['sparsity_loss0'] = sparsity_loss_0
+            ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
+
         for k in ret:
-            if k not in all_ret:
-                all_ret[k] = []
-            all_ret[k].append(ret[k])
+            if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
+                print(f"! [Numerical Error] {k} contains nan or inf.")
 
-    all_ret = {k : torch.cat(all_ret[k], 0) for k in all_ret}
-    # end batchify_rays()
-
-
-    for k in all_ret:
-        k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
-        all_ret[k] = torch.reshape(all_ret[k], k_sh)
-
-    k_extract = ['rgb_map', 'depth_map', 'acc_map']
-    ret_list = [all_ret[k] for k in k_extract]
-    ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
-    return ret_list + [ret_dict]
-
-def render_rays(ray_batch,
-                network_fn,
-                network_query_fn,
-                N_samples,
-                embed_fn=None,
-                retraw=False,
-                lindisp=False,
-                perturb=0.,
-                N_importance=0,
-                network_fine=None,
-                white_bkgd=False,
-                raw_noise_std=0.,
-                verbose=False,
-                pytest=False):
-    """Volumetric rendering.
-    Args:
-      ray_batch: array of shape [batch_size, ...]. All information necessary
-        for sampling along a ray, including: ray origin, ray direction, min
-        dist, max dist, and unit-magnitude viewing direction.
-      network_fn: function. Model for predicting RGB and density at each point
-        in space.
-      network_query_fn: function used for passing queries to network_fn.
-      N_samples: int. Number of different times to sample along each ray.
-      retraw: bool. If True, include model's raw, unprocessed predictions.
-      lindisp: bool. If True, sample linearly in inverse depth rather than in depth.
-      perturb: float, 0 or 1. If non-zero, each ray is sampled at stratified
-        random points in time.
-      N_importance: int. Number of additional times to sample along each ray.
-        These samples are only passed to network_fine.
-      network_fine: "fine" network with same spec as network_fn.
-      white_bkgd: bool. If True, assume a white background.
-      raw_noise_std: ...
-      verbose: bool. If True, print more debugging info.
-    Returns:
-      rgb_map: [num_rays, 3]. Estimated RGB color of a ray. Comes from fine model.
-      disp_map: [num_rays]. Disparity map. 1 / depth.
-      acc_map: [num_rays]. Accumulated opacity along each ray. Comes from fine model.
-      raw: [num_rays, num_samples, 4]. Raw predictions from model.
-      rgb0: See rgb_map. Output for coarse model.
-      disp0: See disp_map. Output for coarse model.
-      acc0: See acc_map. Output for coarse model.
-      z_std: [num_rays]. Standard deviation of distances along ray for each
-        sample.
-    """
-
-    """
-    RAY BATCH
-    Shape: (chunk_size, 8) or (chunk_size, 11) (if use_viewdirs)
-
-    0:3 - ray origin
-    3:6 - ray direction
-    6:8 - near and far bounds
-    8:11 (if use_viewdirs) - viewing direction
-    """
-    N_rays = ray_batch.shape[0]
-    rays_o, rays_d = ray_batch[:,0:3], ray_batch[:,3:6] # [N_rays, 3] each
-    viewdirs = ray_batch[:,-3:] if ray_batch.shape[-1] > 8 else None
-    bounds = torch.reshape(ray_batch[...,6:8], [-1,1,2]) # (chunk_size, 1, 2)
-    near, far = bounds[...,0], bounds[...,1] # [-1,1]
-
-    t_vals = torch.linspace(0., 1., steps=N_samples)
-    if not lindisp:
-        # z_vals = torch.linspace(near, far, steps=N_samples)
-        # same thing as the following line
-        z_vals = near * (1.-t_vals) + far * (t_vals)
-    else:
-        z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
-
-    # z_vals is now of shape (N_rays, N_samples)
-    z_vals = z_vals.expand([N_rays, N_samples])
-
-    if perturb > 0.:
-        # get intervals between samples
-        mids = .5 * (z_vals[...,1:] + z_vals[...,:-1])
-        upper = torch.cat([mids, z_vals[...,-1:]], -1)
-        lower = torch.cat([z_vals[...,:1], mids], -1)
-        # stratified samples in those intervals
-        t_rand = torch.rand(z_vals.shape)
-
-        # Pytest, overwrite u with numpy's fixed random numbers
-        if pytest:
-            np.random.seed(0)
-            t_rand = np.random.rand(*list(z_vals.shape))
-            t_rand = torch.Tensor(t_rand)
-
-        z_vals = lower + (upper - lower) * t_rand
-
-    pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
-
-    raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
-
-    if N_importance > 0:
-
-        rgb_map_0, depth_map_0, acc_map_0, sparsity_loss_0 = rgb_map, depth_map, acc_map, sparsity_loss
-
-        z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
-        z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
-        z_samples = z_samples.detach()
-
-        z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
-        pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
-
-        run_fn = network_fn if network_fine is None else network_fine
-#         raw = run_network(pts, fn=run_fn)
-        raw = network_query_fn(pts, viewdirs, run_fn)
-
-        rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
-
-    ret = {'rgb_map' : rgb_map, 'depth_map' : depth_map, 'acc_map' : acc_map, 'sparsity_loss': sparsity_loss}
-    if retraw:
-        ret['raw'] = raw
-    if N_importance > 0:
-        ret['rgb0'] = rgb_map_0
-        ret['depth0'] = depth_map_0
-        ret['acc0'] = acc_map_0
-        ret['sparsity_loss0'] = sparsity_loss_0
-        ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
-
-    for k in ret:
-        if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
-            print(f"! [Numerical Error] {k} contains nan or inf.")
-
-    return ret
+        return ret
 
 def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, net_chunk=1024*64):
     """Prepares inputs and applies network 'fn'.
@@ -376,20 +405,14 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, net_chunk=1024*64)
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
-    outputs_flat = batchify(fn, net_chunk)(embedded)
+    output = []
+    for i in range(0, embedded.shape[0], net_chunk):
+        output.append(fn(embedded[i:i + net_chunk]))
+
+    outputs_flat = torch.cat(output, 0)
     outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
-
-def batchify(fn, chunk):
-    """Constructs a version of 'fn' that applies to smaller batches.
-    """
-    if chunk is None:
-        return fn
-    def ret(inputs):
-        return torch.cat([fn(inputs[i:i+chunk]) for i in range(0, inputs.shape[0], chunk)], 0)
-    return ret
-
 
 def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
     """Transforms model's predictions to semantically meaningful values.
@@ -524,16 +547,3 @@ if __name__ == '__main__':
     ax = fig.add_subplot(111, projection='3d')
     ax.scatter(pts[...,0], pts[...,1], pts[...,2])
     plt.show()
-
-
-
-# a js script that constantly listens for elements with class combination = "style-scope ytd-popup-container"
-# when such an element is found, remove the element and log the operation in console
-
-# targetElement = "style-scope ytd-popup-container"
-
-# # event listener here
-# document.addEventListener('DOMContentLoaded', function() {
-#     var element = document.getElementsByClassName(targetElement);
-#     element.parentNode.removeChild(element);
-# }, false);

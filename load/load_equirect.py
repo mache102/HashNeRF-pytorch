@@ -27,7 +27,7 @@ def concat_all(batch):
 
     return batch
 
-def load_st3d_data(baseDir: str, stage=0):
+def load_equirect_data(baseDir: str, stage=0):
 
     basename = baseDir.split('/')[-1]+'_'
     rgb = np.asarray(Image.open(os.path.join(baseDir, basename+'rgb.png'))) / 255.0
@@ -35,8 +35,6 @@ def load_st3d_data(baseDir: str, stage=0):
     # load depth.
     # if using matterport3d dataset, then depth is stored in .exr format
     # else (structured3d), depth is stored in .png format
-    # TODO: what about google maps street view dataset?
-    # it could be .png
     if baseDir.split('/')[-2] == 'mp3d':
         print(os.path.join(baseDir, basename+'depth.exr'))
         d = cv2.imread(os.path.join(baseDir, basename+'depth.exr'), cv2.IMREAD_ANYDEPTH)
@@ -88,8 +86,6 @@ def load_st3d_data(baseDir: str, stage=0):
     batch = EquirectRays()
     batch.g = []
     batch_test = EquirectRays()
-    # rays_o, rays_d, rays_g, rays_rgb, rays_depth = [], [], [], [], []
-    # rays_o_test, rays_d_test, rays_rgb_test, rays_depth_test = [], [], [], []
     if stage > 0:
         if stage == 1:
             x, z = coord[..., 0], coord[..., 2]
@@ -127,22 +123,11 @@ def load_st3d_data(baseDir: str, stage=0):
                 batch.depth.append(dep[mask>0])
                 batch.g.append(gradient[mask>0])
 
-                # rays_o.append(np.repeat(c.reshape(1, -1), (mask>0).sum(), axis=0))
-                # rays_g.append(gradient[mask>0])
-                # rays_d.append(dir[mask>0])
-                # rays_rgb.append(rgb[mask>0])
-                # rays_depth.append(dep[mask>0])
-
             elif idx < 110:
                 batch_test.o.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
                 batch_test.d.append(original_coord.reshape(-1, 3))
                 batch_test.rgb.append(np.asarray(Image.open(os.path.join(baseDir, 'test', f'rgb_{str(idx - 100).zfill(3)}.png'))).reshape(-1, 3))
                 batch_test.depth.append(dep.reshape(-1))
-
-                # rays_o_test.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
-                # rays_d_test.append(original_coord.reshape(-1, 3))
-                # rays_rgb_test.append(np.asarray(Image.open(os.path.join(baseDir, 'test', 'rgb_{}.png'.format(idx - 100)))).reshape(-1 ,3))
-                # rays_depth_test.append(dep.reshape(-1))
 
             elif idx == 110:
                 batch_test.o.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
@@ -150,23 +135,11 @@ def load_st3d_data(baseDir: str, stage=0):
                 batch_test.rgb.append(rgb.reshape(-1, 3))
                 batch_test.depth.append(dep.reshape(-1))
 
-                # rays_o_test.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
-                # rays_d_test.append(coord.reshape(-1, 3))
-                # rays_rgb_test.append(rgb.reshape(-1, 3))
-                # rays_depth_test.append(dep.reshape(-1))
-
-    # use this functio to reduce verbose code
+    # use this function to reduce verbose code
     batch = concat_all(batch)
     batch_test = concat_all(batch_test)
 
-    # rays_o, rays_o_test = np.concatenate(rays_o, axis=0), np.concatenate(rays_o_test, axis=0)
-    # rays_d, rays_d_test = np.concatenate(rays_d, axis=0), np.concatenate(rays_d_test, axis=0)
-    # rays_g = np.concatenate(rays_g, axis=0)
-    # rays_rgb, rays_rgb_test = np.concatenate(rays_rgb, axis=0), np.concatenate(rays_rgb_test, axis=0)
-    # rays_depth, rays_depth_test = np.concatenate(rays_depth, axis=0), np.concatenate(rays_depth_test, axis=0)
-    
     # rays_o, rays_d, rays_g, rays_rgb, rays_depth, [H, W]
     # all in flatten format : [N(~H*W*100), 3 or 1]
     
     return batch, batch_test, H, W
-    # return [rays_o, rays_o_test], [rays_d, rays_d_test], rays_g, [rays_rgb, rays_rgb_test], [rays_depth, rays_depth_test], [int(H), int(W)]
