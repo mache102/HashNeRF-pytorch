@@ -364,7 +364,7 @@ def render_rays(ray_batch,
 
     return ret
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, net_chunk=1024*64):
     """Prepares inputs and applies network 'fn'.
     """
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
@@ -376,7 +376,7 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
-    outputs_flat = batchify(fn, netchunk)(embedded)
+    outputs_flat = batchify(fn, net_chunk)(embedded)
     outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
@@ -403,9 +403,17 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         acc_map: [num_rays]. Sum of weights along each ray.
         weights: [num_rays, num_samples]. Weights assigned to each sampled color.
         depth_map: [num_rays]. Estimated distance to object.
+    
+    
+    Section 4, pg. 6. Volume Rendering with Radiance Fields
+
+    C(r) = sum (i = 1 to N) T_i * (1-exp(sigma*dist))c_i
+
+    volumetric rendering of a color c with density sigma. c(t) and sigma(t) are the color & density at point r(t)
     """
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
 
+    # differences of z vals = dists. last value is 1e10 (astronomically large in the context)
     dists = z_vals[...,1:] - z_vals[...,:-1]
     dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, N_samples]
 
@@ -414,6 +422,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
     noise = 0.
     if raw_noise_std > 0.:
+        # sigma
         noise = torch.randn(raw[...,3].shape) * raw_noise_std
 
         # Overwrite randomly sampled data if pytest
@@ -425,7 +434,9 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     # sigma_loss = sigma_sparsity_loss(raw[...,3])
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
-    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
+
+    ones = torch.ones((alpha.shape[0], 1))
+    weights = alpha * torch.cumprod(torch.cat([ones, 1.-alpha + 1e-10], -1), -1)[:, :-1]
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
 
     depth_map = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
@@ -513,3 +524,16 @@ if __name__ == '__main__':
     ax = fig.add_subplot(111, projection='3d')
     ax.scatter(pts[...,0], pts[...,1], pts[...,2])
     plt.show()
+
+
+
+# a js script that constantly listens for elements with class combination = "style-scope ytd-popup-container"
+# when such an element is found, remove the element and log the operation in console
+
+# targetElement = "style-scope ytd-popup-container"
+
+# # event listener here
+# document.addEventListener('DOMContentLoaded', function() {
+#     var element = document.getElementsByClassName(targetElement);
+#     element.parentNode.removeChild(element);
+# }, false);

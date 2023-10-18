@@ -189,6 +189,7 @@ class NeRFSmall(nn.Module):
     
     def forward(self, x):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
+        # (net_chunk, 3)
 
         # sigma
         h = input_pts
@@ -197,7 +198,12 @@ class NeRFSmall(nn.Module):
             if l != self.num_layers - 1:
                 h = F.relu(h, inplace=True)
 
+        print(h.shape)
+
         sigma, geo_feat = h[..., 0], h[..., 1:]
+        # feed SH (geo_Feat) to color network
+        # (net_chunk, 1),
+        # (net_chunk, 15)
         
         # color
         h = torch.cat([input_views, geo_feat], dim=-1)
@@ -206,8 +212,24 @@ class NeRFSmall(nn.Module):
             if l != self.num_layers_color - 1:
                 h = F.relu(h, inplace=True)
             
+        # (net_chunk, 3)
         # color = torch.sigmoid(h)
         color = h
         outputs = torch.cat([color, sigma.unsqueeze(dim=-1)], -1)
+        # (net_chunk, 3 + 1)
 
         return outputs
+    
+
+if __name__ == '__main__':
+    model = NeRFSmall(num_layers=3,
+                 hidden_dim=64,
+                 geo_feat_dim=15,
+                 num_layers_color=4,
+                 hidden_dim_color=64,
+                 input_ch=3, input_ch_views=3,)
+    
+    x = torch.rand(10, 6)
+    y = model(x)
+
+    import pdb; pdb.set_trace()

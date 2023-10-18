@@ -86,7 +86,7 @@ def create_nerf(args):
     network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
                                                                 embed_fn=embed_fn,
                                                                 embeddirs_fn=embeddirs_fn,
-                                                                netchunk=args.netchunk)
+                                                                net_chunk=args.net_chunk)
 
     """
     Step 4: create optimizer
