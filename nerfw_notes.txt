@@ -1,0 +1,41 @@
+(real) appearance embedding vector l^(a), length n^(a)
+
+the second MLP optimizes SH geofeat, viewdirs and now appearance embedding as well
+> color control flexibility
+> structure is kept consistent (first network)
+
+original color mlp = static
+transient head for color * density, density is allowed to vary across training images
+> + uncertantity field
+
+loss ignores unreliable pixels and 3D locations that are likely to contain occluders
+
+We model each pixel’s color as an isotropic normal distribution whose likelihood we will maximize, and
+we “render” the variance of that distribution using the same
+volume rendering approach used by NeRF. These two model
+components allow NeRF-W to disentangle static and transient phenomena without explicit supervision.
+
+ngp: 
+xyz -> hash -> mlp1
+mlp1 -> density
+mlp1 -> mlp2 -> rgb
+
+dir -> sh -> mlp2 -> rgb
+appearance -> mlp2 -> rgb
+
+nerfw:
+xyz -> mlp1
+mlp1 -> density
+mlp1 -> mlp2 -> rgb
+dir -> mlp2 -> rgb
+appearance -> mlp2 -> rgb
+
+xyz -> mlpt 
+transient -> mlpt 
+mlpt -> rgb(t), density(t), uncertainty
+
+proposed fusion: 
+1. add hash operation to nerfw xyz   (xyz -> mlp1)
+2. add sh operation to nerfw dir (dir -> sh -> mlp2)
+
+keep remaining unchanged
