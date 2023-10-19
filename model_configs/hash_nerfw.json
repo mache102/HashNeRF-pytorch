@@ -31,6 +31,7 @@
             "input_ch": 16,
             "layers": 4,
             "hdim": 64
-        }
+        },
+        "beta_min": 0.03
     }
 }

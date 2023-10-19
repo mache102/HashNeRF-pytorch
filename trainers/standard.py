@@ -84,6 +84,7 @@ class StandardTrainer(BaseTrainer):
         self.render_poses = dataset.render_poses
         if self.args.render_test:
             self.render_poses = np.array(self.poses[self.i_test])
+        self.render_poses = torch.Tensor(self.render_poses).to(device)
     
 
         cc = dataset.cc

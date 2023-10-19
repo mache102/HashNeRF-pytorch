@@ -5,6 +5,10 @@ def config_parser():
     parser = configargparse.ArgumentParser()
     parser.add_argument('--config', is_config_file=True,
                         help='config file path')
+    parser.add_argument("--nerf_type", type=str, default="vanilla_nerf",
+                        help="nerf type [this parameter is WIP]")
+    parser.add_argument('--model_config', type=str, default="vanilla_nerf",
+                        help='model config name')
     parser.add_argument("--expname", type=str,
                         help='experiment name')
     parser.add_argument("--basedir", type=str, default='./logs/',

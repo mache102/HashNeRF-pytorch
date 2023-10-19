@@ -1,26 +1,22 @@
 {
     "coarse": {
         "sigma": {
-            "input_ch": null,
             "layers": 2,
             "hdim": 64,
             "geo_feat_dim": 15
         },
         "color": {
-            "input_ch": null,
             "layers": 3,
             "hdim": 64
         }
     },
     "fine": {
         "sigma": {
-            "input_ch": null,
             "layers": 2,
             "hdim": 64,
             "geo_feat_dim": 15
         },
         "color": {
-            "input_ch": null,
             "layers": 3,
             "hdim": 64
         }

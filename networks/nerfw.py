@@ -4,21 +4,11 @@ NeRF and NeRFSmall models
 """
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
 
-from typing import List
-from dataclasses import dataclass, field
-
-from networks.network_configs import SigmaNetConfig, ColorNetConfig
-
-class CustomizableNeRF(nn.Module):
-    def __init__(self, typ,
-                 sigma: SigmaNetConfig,
-                 color: ColorNetConfig,
-                 encode_appearance: bool = False, input_ch_a: int = 48,
-                 encode_transient: bool = False, input_ch_t: int = 16,
-                 beta_min: float = 0.03):
+class NeRFW(nn.Module):
+    def __init__(self, typ, model_config,
+                 appearance: bool = False, 
+                 transient: bool = False):
         """
         https://github.com/kwea123/nerf_pl/blob/nerfw/models/nerf.py
 
@@ -129,21 +119,20 @@ class CustomizableNeRF(nn.Module):
 
         (MLP3 in nerfw paper)
         """
-        hdim2 = hdim // 2
-                
+
         transient_net = []
         for l in range(layers):
             if l == 0:
-                transient_net.append(nn.Linear(hdim + input_ch, hdim2))
+                transient_net.append(nn.Linear(hdim + input_ch, hdim // 2))
             else:
-                transient_net.append(nn.Linear(hdim2, hdim2))
+                transient_net.append(nn.Linear(hdim // 2, hdim // 2))
             transient_net.append(nn.ReLU(True))
 
         self.transient_net = nn.Sequential(*transient_net)
 
-        self.transient_sigma = nn.Sequential(nn.Linear(hdim2, 1), nn.Softplus())
-        self.transient_color = nn.Sequential(nn.Linear(hdim2, 3), nn.Sigmoid())
-        self.transient_beta = nn.Sequential(nn.Linear(hdim2, 1), nn.Softplus())
+        self.transient_sigma = nn.Sequential(nn.Linear(hdim // 2, 1), nn.Softplus())
+        self.transient_color = nn.Sequential(nn.Linear(hdim // 2, 3), nn.Sigmoid())
+        self.transient_beta = nn.Sequential(nn.Linear(hdim // 2, 1), nn.Softplus())
 
     def forward(self, x, sigma_only=False, output_transient=True):
         """
@@ -238,192 +227,12 @@ class CustomizableNeRF(nn.Module):
         return torch.cat([static, transient], 1) # (B, 9)
     
 
-class VanillaNeRF(nn.Module):
-    def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
-        """ 
-        """
-        super(VanillaNeRF, self).__init__()
-        self.D = D
-        self.W = W
-        self.input_ch = input_ch
-        self.input_ch_views = input_ch_views
-        self.skips = skips
-        self.use_viewdirs = use_viewdirs
-        
-        self.pts_linears = nn.ModuleList(
-            [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in range(D-1)])
-        
-        ### Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
-        self.views_linears = nn.ModuleList([nn.Linear(input_ch_views + W, W//2)])
 
-        ### Implementation according to the paper
-        # self.views_linears = nn.ModuleList(
-        #     [nn.Linear(input_ch_views + W, W//2)] + [nn.Linear(W//2, W//2) for i in range(D//2)])
-        
-        if use_viewdirs:
-            self.feature_linear = nn.Linear(W, W)
-            self.alpha_linear = nn.Linear(W, 1)
-            self.rgb_linear = nn.Linear(W//2, 3)
-        else:
-            self.output_linear = nn.Linear(W, output_ch)
-
-    def forward(self, x):
-        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
-        h = input_pts
-        for i, l in enumerate(self.pts_linears):
-            h = self.pts_linears[i](h)
-            h = F.relu(h)
-            if i in self.skips:
-                h = torch.cat([input_pts, h], -1)
-
-        if self.use_viewdirs:
-            alpha = self.alpha_linear(h)
-            feature = self.feature_linear(h)
-            h = torch.cat([feature, input_views], -1)
-        
-            for i, l in enumerate(self.views_linears):
-                h = self.views_linears[i](h)
-                h = F.relu(h)
-
-            rgb = self.rgb_linear(h)
-            outputs = torch.cat([rgb, alpha], -1)
-        else:
-            outputs = self.output_linear(h)
-
-        return outputs    
-
-        
-class NeRFGradient(NeRF):
-    def __init__(self, **kwargs):
-        """ 
-        """
-        super(NeRFGradient, self).__init__(**kwargs)
-        if self.use_viewdirs:
-            self.gradient_linear = nn.Linear(self.W//2, 3)
-        
-    def forward(self, x):
-        if x.shape[-1] > self.input_ch + self.input_ch_views:
-            input_pts, input_views, input_depth = torch.split(x, [self.input_ch, self.input_ch_views, 1], dim=-1)
-        else:
-            input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
-
-        h = input_pts
-        for i, l in enumerate(self.pts_linears):
-            h = self.pts_linears[i](h)
-            h = F.relu(h)
-            if i in self.skips:
-                h = torch.cat([input_pts, h], -1)
-
-        if self.use_viewdirs:
-            alpha = self.alpha_linear(h)
-            feature = self.feature_linear(h)
-            h = torch.cat([feature, input_views], -1)
-        
-            for i, l in enumerate(self.views_linears):
-                h = self.views_linears[i](h)
-                h = F.relu(h)
-
-            rgb = self.rgb_linear(h)
-            gradient = self.gradient_linear(h)
-            outputs = torch.cat([rgb, alpha, gradient], -1)
-        else:
-            outputs = self.output_linear(h)
-
-        return outputs    
-
-# Small NeRF for Hash embeddings
-class NeRFSmall(nn.Module):
-    def __init__(self,
-                 num_layers=3,
-                 hidden_dim=64,
-                 geo_feat_dim=15,
-                 num_layers_color=4,
-                 hidden_dim_color=64,
-                 input_ch=3, input_ch_views=3,
-                 ):
-        super(NeRFSmall, self).__init__()
-
-        self.input_ch = input_ch
-        self.input_ch_views = input_ch_views
-
-        # sigma network
-        self.num_layers = num_layers
-        self.hidden_dim = hidden_dim
-        self.geo_feat_dim = geo_feat_dim
-
-        sigma_net = []
-        for l in range(num_layers):
-            if l == 0:
-                in_dim = self.input_ch
-            else:
-                in_dim = hidden_dim
-            
-            if l == num_layers - 1:
-                out_dim = 1 + self.geo_feat_dim # 1 sigma + 15 SH features for color
-            else:
-                out_dim = hidden_dim
-            
-            sigma_net.append(nn.Linear(in_dim, out_dim, bias=False))
-
-        self.sigma_net = nn.ModuleList(sigma_net)
-
-        # color network
-        self.num_layers_color = num_layers_color        
-        self.hidden_dim_color = hidden_dim_color
-        
-        color_net =  []
-        for l in range(num_layers_color):
-            if l == 0:
-                in_dim = self.input_ch_views + self.geo_feat_dim
-            else:
-                in_dim = hidden_dim
-            
-            if l == num_layers_color - 1:
-                out_dim = 3 # 3 rgb
-            else:
-                out_dim = hidden_dim
-            
-            color_net.append(nn.Linear(in_dim, out_dim, bias=False))
-
-        self.color_net = nn.ModuleList(color_net)
-    
-    def forward(self, x):
-        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
-        # (net_chunk, 3)
-
-        # sigma
-        h = input_pts
-        for l in range(self.num_layers):
-            h = self.sigma_net[l](h)
-            if l != self.num_layers - 1:
-                h = F.relu(h, inplace=True)
-
-        print(h.shape)
-
-        sigma, geo_feat = h[..., 0], h[..., 1:]
-        # feed SH (geo_Feat) to color network
-        # (net_chunk, 1),
-        # (net_chunk, 15)
-        
-        # color
-        h = torch.cat([input_views, geo_feat], dim=-1)
-        for l in range(self.num_layers_color):
-            h = self.color_net[l](h)
-            if l != self.num_layers_color - 1:
-                h = F.relu(h, inplace=True)
-            
-        # (net_chunk, 3)
-        # color = torch.sigmoid(h)
-        color = h
-        outputs = torch.cat([color, sigma.unsqueeze(dim=-1)], -1)
-        # (net_chunk, 3 + 1)
-
-        return outputs
     
 
 if __name__ == '__main__':
-    model = NeRFSmall(num_layers=3,
-                 hidden_dim=64,
+    model = HashNeRF(num_layers=3,
+                 hdim=64,
                  geo_feat_dim=15,
                  num_layers_color=4,
                  hidden_dim_color=64,

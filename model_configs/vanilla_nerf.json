@@ -1,13 +1,11 @@
 {
     "coarse": {
-        "input_ch": null,
         "layers": 8,
         "hdim": 256,
         "output_ch": 4,
         "skips": [4]
     },
     "fine": {
-        "input_ch": null,
         "layers": 8,
         "hdim": 256,
         "output_ch": 4,

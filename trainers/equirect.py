@@ -52,6 +52,9 @@ class EquirectTrainer(BaseTrainer):
     def unpack_dataset(self, dataset):
         self.rays_train = dataset.rays_train
         self.rays_test = dataset.rays_test
+        self.rays_train = shuffle_rays(all_to_tensor(self.rays_train, device))
+        self.rays_test = all_to_tensor(self.rays_test, device)
+
         self.bbox = dataset.bbox
 
         cc = dataset.cc

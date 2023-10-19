@@ -25,7 +25,7 @@ def create_nerf(args):
     
     # input ch as in model input ch
     embedders["pos"], input_ch = get_embedder(args.multires, args, i=args.i_embed)
-    if args.i_embed==1:
+    if args.i_embed == 1:
         # hashed embedding table
         pos_embedder_params = list(embedders["pos"].parameters())
 
