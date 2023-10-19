@@ -1,5 +1,8 @@
 import torch 
 import numpy as np
+import os
+import imageio 
+import matplotlib.pyplot as plt
 
 def get_transform_matrix(translation, rotation):
     """
@@ -103,3 +106,72 @@ def to_8b(x):
 
 def psnr(pred_img, gt_img):
     return -10. * np.log10(np.mean(np.square(pred_img - gt_img)))
+
+def img2mse(x, y):
+    return np.mean((x - y) ** 2)
+
+def mse2psnr(x):
+    return -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
+
+def save_configs(args):
+    with open(os.path.join(args.savepath, 'args.txt'), 'w') as file:
+        for arg in sorted(vars(args)):
+            attr = getattr(args, arg)
+            file.write('{} = {}\n'.format(arg, attr))
+
+    if args.config is not None:
+        with open(os.path.join(args.savepath, 'config.txt'), 'w') as file:
+            file.write(open(args.config, 'r').read())
+
+def debug_dict(d, name="dict", depth=0):
+    """
+    Check whether any bottommost layer of a dict
+    contains nan or inf.
+
+    (depths may vary by dict key, 
+    so recursively check all layers)
+    """
+    for k in d:
+        if isinstance(d[k], dict):    
+            debug_dict(d[k], name=f"{name}.{k}", depth=depth + 1)
+        else:
+            if torch.isnan(d[k]).any():
+                print(f"! [Numerical Error] {name}.{k} contains nan")
+            if torch.isinf(d[k]).any():
+                print(f"! [Numerical Error] {name}.{k} contains inf")
+
+# example of debug_dict:
+# x = {"a": torch.randn(3,3), "b": {"c": torch.Tensor([np.inf]), "d": torch.randn(3,3), "e": {"f": torch.randn(3,3)}}, "nan_val": torch.Tensor([np.nan])}
+# debug_dict(x)
+
+def save_imgs(self, rgb, depth, savepath, i,
+                method="imageio"):
+    """
+    save rgb and depth as a figure
+    """
+    if savepath is None:
+        return 
+    
+    if method == "imageio":
+        fn = os.path.join(savepath, f'rgb_{i:03d}.png')
+        imageio.imwrite(fn, to_8b(rgb))
+    
+        fn = os.path.join(savepath, f'd_{i:03d}.png')
+        imageio.imwrite(fn, to_8b(depth))     
+    
+    elif method == "matplotlib":
+        # save rgb and depth as a figure
+        fig = plt.figure(figsize=(25, 15))
+        ax = fig.add_subplot(1, 2, 1)
+        rgb = to_8b(rgb)
+        ax.imshow(rgb)
+        ax.axis('off')
+        ax = fig.add_subplot(1, 2, 2)
+        ax.imshow(depth, cmap='plasma', vmin=0, vmax=1)
+        ax.axis('off')
+
+        fn = os.path.join(savepath, f'{i:03d}.png')
+        plt.savefig(fn, bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+    else:
+        raise NotImplementedError

@@ -1,15 +1,54 @@
+import imageio
+import numpy as np
 import os
+import pdb
+import pickle
+import time
+
+from tqdm import tqdm, trange
+from typing import List, Tuple, Dict, Optional
+
 import torch
-import torch.nn as nn
-from radam import RAdam
 
-from embedding.embedder import Embedder
-from embedding.hash_encoding import HashEmbedder 
-from embedding.spherical_harmonic import SHEncoder
-from models import NeRF, NeRFSmall, NeRFGradient
+from renderer import *
+from create_nerf import create_nerf
+from ray_util import *
+from loss import sigma_sparsity_loss, total_variation_loss
 
-def create_nerf(args):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+from load.load_data import load_data
+
+from util import create_expname, all_to_tensor, shuffle_rays, to_8b, save_configs
+from parse_args import config_parser
+
+from util import img2mse, mse2psnr
+
+from dataclasses import dataclass 
+
+# 20231010 15:25
+np.random.seed(0)
+DEBUG = False
+
+   
+def main():
+    dataset = load_data(args)
+    """
+    Experiment saving
+    """
+    # Create log dir and copy the config file
+    basedir = args.basedir
+    args.expname = create_expname(args)
+    expname = args.expname
+    savepath = os.path.join(basedir, expname)
+    args.savepath = savepath # for convenience
+    os.makedirs(savepath, exist_ok=True)
+    save_configs(args)
+
+    """
+    Create nerf model
+
+    set render kwargs
+    """
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     models = {
         "coarse": None,
         "fine": None
@@ -37,6 +76,27 @@ def create_nerf(args):
     """
     Step 2: Create coarse and fine models
     """
+    @dataclass
+class SigmaNetConfig:
+    input_ch: int = 3
+    layers: int = 3
+    hdim: int = 64
+    geo_feat_dim: int = 15
+    skips: List[int] = field(default_factory=lambda: [4])
+
+@dataclass
+class ColorNetConfig:
+    input_ch: int = 3
+    layers: int = 4
+    hdim: int = 64
+
+    model_configs = {
+        "coarse": {
+            "sigma": SigmaNetConfig(input_ch=input_ch, 
+                                    layers=2 if args.i_embed == 1 else 3,)
+        }    
+    }
+
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
     if args.i_embed==1:
@@ -129,48 +189,66 @@ def create_nerf(args):
         if args.i_embed==1:
             embedders["pos"].load_state_dict(ckpt['pos_embedder_state_dict'])
 
-    ##########################
-    # pdb.set_trace()
+    if args.dataset_type == 'equirect':
+        # all to tensor
+        rays = shuffle_rays(all_to_tensor(rays, device))
+        rays_test = all_to_tensor(rays_test, device)
 
-    """
-    Step 5:
-    Batch arguments and return
-    """
+        renderer = VolRenderer(dataset_type=args.dataset_type, h=H, w=W, 
+                               proc_chunk=args.chunk, near=near, far=far, 
+                               use_viewdirs=args.use_viewdirs)
 
-    # testing kwargs:
-    # perturb=  False 
-    # raw noise std = 0
-    return models, embedders, start, grad_vars, optimizer
+    else:
+        # Move testing data to GPU
+        render_poses = torch.Tensor(render_poses).to(device)
 
+        renderer = VolRenderer(dataset_type=args.dataset_type, h=H, w=W,
+                               focal=focal, k=K, 
+                               proc_chunk=args.chunk, near=near, far=far, 
+                               use_viewdirs=args.use_viewdirs)
+    """
+    Skip to render only
+    """
+    # Short circuit if only rendering out from trained model
+    
+    if args.render_only:
+        print('RENDER ONLY')
+        with torch.no_grad():
+            if args.dataset_type == 'equirect':
+                if args.stage > 0:
+                    testsavedir = os.path.join(savepath, 'renderonly_stage_{}_{:06d}'.format(args.stage, start))
+                else:
+                    testsavedir = os.path.join(savepath, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', start))
 
-def get_embedder(multires, args, i=0):
-    """
-    -1: no embedding
-    0: Standard positional encoding (Nerf, section 5.1)
-    1: Hashed pos encoding (Instant-ngp)
-    2: Spherical harmonic encoding (?)
-    """
-    if i == -1:
-        return nn.Identity(), 3
-    elif i == 0:
-        embed_kwargs = {
-                    'include_input' : True,
-                    'input_dims' : 3,
-                    'max_freq_log2' : multires-1,
-                    'num_freqs' : multires,
-                    'log_sampling' : True,
-                    'periodic_fns' : [torch.sin, torch.cos],
-        }
-        
-        embedder_obj = Embedder(**embed_kwargs)
-        embed = lambda x, eo=embedder_obj : eo.embed(x)
-        out_dim = embedder_obj.out_dim
-    elif i == 1:
-        embed = HashEmbedder(bounding_box=args.bounding_box, \
-                            log2_hashmap_size=args.log2_hashmap_size, \
-                            finest_resolution=args.finest_res)
-        out_dim = embed.out_dim
-    elif i == 2:
-        embed = SHEncoder()
-        out_dim = embed.out_dim
-    return embed, out_dim
+                eval_test_omninerf(renderer, savedir=testsavedir, rays_test=rays_test)
+            else:
+                if args.render_test:
+                    # render_test switches to test poses
+                    images = images[i_test]
+                else:
+                    # Default is smoother render_poses path
+                    images = None
+
+                testsavedir = os.path.join(savepath, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
+                os.makedirs(testsavedir, exist_ok=True)
+                print('test poses shape', render_poses.shape)
+
+                rgbs, _ = renderer.render_path(render_poses gt_imgs=images, savedir=testsavedir, 
+                            render_factor=args.render_factor)
+                print('Done rendering', testsavedir)
+                imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to_8b(rgbs), duration=1000//30, quality=8)
+
+            return
+
+if __name__=='__main__':
+    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+
+    parser = config_parser()
+    args = parser.parse_args()
+    args.N_iters += 1
+    if args.dataset_type != 'llff':
+        args.ndc = False
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    main()

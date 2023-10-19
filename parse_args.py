@@ -11,6 +11,8 @@ def config_parser():
                         help='where to store ckpts and logs')
     parser.add_argument("--datadir", type=str, default='./data/llff/fern',
                         help='input data directory')
+    parser.add_argument("--seed", type=int, default=None,
+                        help='random seed')
 
     # training options
     parser.add_argument("--N_iters", type=int, default=10000,
@@ -33,7 +35,7 @@ def config_parser():
                         help='number of rays processed in parallel, decrease if running out of memory')
     parser.add_argument("--net_chunk", type=int, default=1024*64,
                         help='number of pts sent through network in parallel, decrease if running out of memory')
-    parser.add_argument("--no_batching", action='store_true',
+    parser.add_argument("--use_batching", action='store_true',
                         help='only take random rays from 1 image at a time')
     parser.add_argument("--no_reload", action='store_true',
                         help='do not reload weights from saved ckpt')
@@ -96,8 +98,8 @@ def config_parser():
     ## llff flags
     parser.add_argument("--factor", type=int, default=8,
                         help='downsample factor for LLFF images')
-    parser.add_argument("--no_ndc", action='store_true',
-                        help='do not use normalized device coordinates (set for non-forward facing scenes)')
+    parser.add_argument("--ndc", action='store_true',
+                        help='use normalized device coordinates (set for forward facing scenes)')
     parser.add_argument("--lindisp", action='store_true',
                         help='sampling linearly in disparity rather than depth')
     parser.add_argument("--spherify", action='store_true',

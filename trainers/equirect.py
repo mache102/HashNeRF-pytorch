@@ -1,0 +1,234 @@
+import argparse
+import torch
+import numpy as np
+import time 
+import pickle
+import imageio
+
+from tqdm import trange , tqdm 
+
+from loss import total_variation_loss
+from data_classes import EquirectDataset
+from renderer import VolumetricRenderer
+from renderer_util import prepare_rays
+from ray_util import * 
+from util import *
+
+from trainers.base import BaseTrainer 
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+class EquirectTrainer(BaseTrainer):
+    def __init__(self, dataset: EquirectDataset, start,
+                 models: dict, optimizer: torch.optim.Optimizer,
+                 embedders: dict, args: argparse.Namespace):
+
+        self.args = args
+        self.models = models
+        self.optimizer = optimizer
+        self.embedders = embedders
+
+        self.unpack_dataset(dataset)
+        self.volren = VolumetricRenderer(cc=self.cc, models=models,
+                                         embedders=embedders,
+                                         args=args)
+
+        self.savepath = args.savepath
+        self.bsz = args.N_rand
+        self.iters = args.N_iters + 1
+        self.use_batching = args.use_batching
+
+        self.precrop = {
+            "iters": args.precrop_iters,
+            "frac": args.precrop_frac
+        }
+
+        self.N_rand = args.N_rand
+        self.i_batch = 0
+        self.global_step = start
+        self.start = start + 1
+        self.end = args.N_iters
+
+    def unpack_dataset(self, dataset):
+        self.rays_train = dataset.rays_train
+        self.rays_test = dataset.rays_test
+        self.bbox = dataset.bbox
+
+        cc = dataset.cc
+        self.cc = cc 
+        self.h = cc.h
+        self.w = cc.w
+        self.focal = cc.focal
+        self.k = cc.k
+        self.near = cc.near
+        self.far = cc.far
+
+    def fit(self):
+        print('Begin, iter: %d' % self.start)
+
+        for iter in trange(self.start, self.end):
+            batch_o, batch_d, \
+                target_rgb, target_depth, target_gradient = \
+            self.get_batch(self.i_batch, self.i_batch + self.N_rand)
+            self.i_batch += self.N_rand
+
+            self.shuffle()
+            # optimize
+            rays, reshape_to = prepare_rays(rays=[batch_o, batch_d], ndc=self.args.ndc)
+            rgb, depth, gradient, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
+            loss, psnr = self.calc_loss(rgb, target_rgb, 
+                                        depth, target_depth, 
+                                        gradient, target_gradient, 
+                                        extras)
+            self.update_lr()
+            self.log_progress()
+
+            if iter % self.args.i_print == 0:
+                tqdm.write(f"[TRAIN] Iter: {iter} Loss: {loss.item()}  PSNR: {psnr.item()}")
+
+            global_step += 1
+
+
+    def get_batch(self, start, end):   
+        batch_o = self.rays_train.o[start:end]
+        batch_d = self.rays_train.d[start:end]
+
+        target_rgb = self.rays_train.rgb[start:end]
+        target_depth = self.rays_train.d[start:end]
+        target_gradient = self.rays_train.g[start:end]
+        return batch_o, batch_d, target_rgb, target_depth, target_gradient
+
+    def shuffle(self):
+        if self.i_batch >= self.rays_train.rgb.shape[0]:
+            print("Shuffle data after an epoch!")
+            self.rays_train = shuffle_rays(self.rays_train)
+            self.i_batch = 0
+
+    def calc_loss(self, rgb, target_rgb, 
+                  depth, target_depth,
+                  gradient, target_gradient,
+                   extras):
+
+        rgb_loss = img2mse(rgb, target_rgb)
+        loss = rgb_loss
+        # depth_loss
+        if self.args.use_depth:
+            loss += torch.abs(depth - target_depth).mean()
+            
+        if self.args.use_gradient:
+            loss += img2mse(gradient, target_gradient)
+
+        psnr = mse2psnr(rgb_loss)
+        
+        psnr_0 = None
+        if 'rgb_0' in extras:
+            rgb_loss_0 = img2mse(extras['rgb_0'], target_rgb)
+            loss += rgb_loss_0
+            if self.args.use_depth:
+                loss += torch.abs(extras['depth_0'] - target_depth).mean()
+
+            if self.args.use_gradient:
+                loss += img2mse(extras['grad_0'], target_gradient)
+
+            psnr_0 = mse2psnr(rgb_loss_0)
+
+        loss.backward()
+        self.optimizer.step()
+
+        return loss, psnr, psnr_0
+
+    def update_lr(self):
+        decay_rate = 0.1
+        decay_steps = self.args.lrate_decay * 1000
+        new_lrate = self.args.lrate * (decay_rate ** (self.global_step / decay_steps))
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = new_lrate
+
+    def log_progress(self, iter):
+        """
+        SAVE CHECKPOINT
+        """
+        if iter % self.args.i_weights == 0:
+            path = os.path.join(self.savepath, '{:06d}.tar'.format(iter))
+            if self.args.i_embed == 1:
+                torch.save({
+                    'global_step': self.global_step,
+                    'coarse_model_state_dict': self.models["coarse"].state_dict(),
+                    'fine_model_state_dict': self.models["fine"].state_dict(),
+                    'pos_embedder_state_dict': self.embedders["pos"].state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                }, path)
+            else:
+                torch.save({
+                    'global_step': self.global_step,
+                    'coarse_model_state_dict': self.models["coarse"].state_dict(),
+                    'fine_model_state_dict': self.models["fine"].state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                }, path)
+            print('Saved checkpoints at', path)
+
+        
+        if iter % self.args.i_testset == 0 and iter > 0:
+            if self.args.stage > 0:
+                test_savepath = os.path.join(self.savepath, 'stage{}_test_{:06d}'.format(self.args.stage, iter))
+            else:
+                test_savepath = os.path.join(self.savepath, 'testset_{:06d}'.format(iter))
+            os.makedirs(test_savepath, exist_ok=True)
+            with torch.no_grad():
+                rgbs, _ = self.render_save(self.rays_test.o, self.rays_test.d, 
+                                           savedir=test_savepath, render_factor=self.args.render_factor)
+            print('Done rendering', test_savepath)
+            
+            # calculate MSE and PSNR for last image(gt pose)
+            gt_loss = img2mse(torch.tensor(rgbs[-1]), torch.tensor(self.rays_test.rgb[-1]))
+            gt_psnr = mse2psnr(gt_loss)
+            print('ground truth loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
+            with open(os.path.join(test_savepath, 'statistics.txt'), 'w') as f:
+                f.write('loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
+            
+            rgbs = np.concatenate([rgbs[:-1],rgbs[:-1][::-1]])
+            imageio.mimwrite(os.path.join(test_savepath, 'video2.gif'), to_8b(rgbs), duration=1000//10)
+            print('Saved test set')   
+            
+    def render_save(self, rays_o, rays_d, savedir):
+        """
+        Render to save path - equirect
+        """
+        rgbs = []
+        depths = []
+
+        temp_h = self.h 
+        temp_w = self.w
+
+        h = self.h * self.args.render_factor 
+        w = self.w * self.args.render_factor
+
+
+        batch = h * w    
+        for i in trange(rays_o.shape[0] // batch):
+            start = i * batch
+            end = (i + 1) * batch
+            rays, reshape_to = self.prepare_rays(rays=[rays_o[start:end], 
+                                                        rays_d[start:end]], 
+                                                    ndc=False)
+            rgb, depth, _, _ = \
+                self.volren.render(rays=rays, reshape_to=reshape_to)
+            
+            if i == 0:
+                print(rgb.shape, depth.shape)
+            rgb = rgb.reshape(h, w, 3).cpu().numpy()
+            rgbs.append(rgb)
+
+            depth = depth.reshape(h, w).cpu().numpy()
+            depths.append(depth)
+
+            if savedir is not None:
+                self.save_imgs(rgb, depth, savedir, i)
+
+        # revert the height and width after rendering
+        self.volren.h = temp_h 
+        self.volren.w = temp_w
+
+        rgbs = np.stack(rgbs, 0)
+        depths = np.stack(depths, 0)
+        return rgbs, depths 

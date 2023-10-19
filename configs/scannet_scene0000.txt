@@ -3,8 +3,7 @@ basedir = ./logs
 datadir = /work/yashsb/datasets/ScanNet/
 dataset_type = scannet
 
-no_batching = False
-
+use_batching = True
 use_viewdirs = True
 white_bkgd = False
 lrate_decay = 500

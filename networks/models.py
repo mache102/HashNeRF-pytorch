@@ -10,19 +10,7 @@ import numpy as np
 from typing import List
 from dataclasses import dataclass, field
 
-@dataclass
-class SigmaNetConfig:
-    input_ch: int = 3
-    layers: int = 3
-    hdim: int = 64
-    geo_feat_dim: int = 15
-    skips: List[int] = field(default_factory=lambda: [4])
-
-@dataclass
-class ColorNetConfig:
-    input_ch: int = 3
-    layers: int = 4
-    hdim: int = 64
+from networks.network_configs import SigmaNetConfig, ColorNetConfig
 
 class CustomizableNeRF(nn.Module):
     def __init__(self, typ,
@@ -254,7 +242,7 @@ class VanillaNeRF(nn.Module):
     def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
         """ 
         """
-        super(NeRF, self).__init__()
+        super(VanillaNeRF, self).__init__()
         self.D = D
         self.W = W
         self.input_ch = input_ch
@@ -303,36 +291,6 @@ class VanillaNeRF(nn.Module):
             outputs = self.output_linear(h)
 
         return outputs    
-
-    def load_weights_from_keras(self, weights):
-        assert self.use_viewdirs, "Not implemented if use_viewdirs=False"
-        
-        # Load pts_linears
-        for i in range(self.D):
-            idx_pts_linears = 2 * i
-            self.pts_linears[i].weight.data = torch.from_numpy(np.transpose(weights[idx_pts_linears]))    
-            self.pts_linears[i].bias.data = torch.from_numpy(np.transpose(weights[idx_pts_linears+1]))
-        
-        # Load feature_linear
-        idx_feature_linear = 2 * self.D
-        self.feature_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_feature_linear]))
-        self.feature_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_feature_linear+1]))
-
-        # Load views_linears
-        idx_views_linears = 2 * self.D + 2
-        self.views_linears[0].weight.data = torch.from_numpy(np.transpose(weights[idx_views_linears]))
-        self.views_linears[0].bias.data = torch.from_numpy(np.transpose(weights[idx_views_linears+1]))
-
-        # Load rgb_linear
-        idx_rbg_linear = 2 * self.D + 4
-        self.rgb_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear]))
-        self.rgb_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_rbg_linear+1]))
-
-        # Load alpha_linear
-        idx_alpha_linear = 2 * self.D + 6
-        self.alpha_linear.weight.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear]))
-        self.alpha_linear.bias.data = torch.from_numpy(np.transpose(weights[idx_alpha_linear+1]))
-
 
         
 class NeRFGradient(NeRF):

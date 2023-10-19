@@ -3,7 +3,6 @@ basedir = ./logs
 datadir = ./data/nerf_synthetic/ship
 dataset_type = blender
 
-no_batching = True
 
 use_viewdirs = True
 white_bkgd = True

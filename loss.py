@@ -8,7 +8,13 @@ import pdb
 from embedding.hash_encoding import hash
 
 
-def total_variation_loss(embeddings, min_resolution, max_resolution, level, log2_hashmap_size, n_levels=16):
+def total_variation_loss(embedder, level):
+    embeddings = embedder.embeddings
+    min_resolution = embedder.min_res 
+    max_resolution = embedder.max_res
+    log2_hashmap_size = embedder.log2_hashmap_size
+    n_levels = embedder.n_levels
+
     # Get resolution
     b = exp((log(max_resolution)-log(min_resolution))/(n_levels-1))
     resolution = torch.tensor(floor(min_resolution * b**level))
