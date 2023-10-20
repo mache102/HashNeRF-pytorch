@@ -104,12 +104,6 @@ class VolumetricRenderer:
         if self.seed is not None:
             torch.manual_seed(self.seed)
 
-        # if fine rays not rendered,
-        # then coarse outputs are marked as final
-        self.coarse_name = ""
-        if self.N_importance > 0:
-            self.coarse_name = "_0"
-
     def render(self, rays, reshape_to, **kwargs):
         """
         Rendering entry function
@@ -127,19 +121,13 @@ class VolumetricRenderer:
         """
         total_rays = rays.shape[0]
 
-        # coarse_name is _0 if fine is used
-        # other wise just empty string
-        # so any prelim outputs are referred to with _0
-        # and final outputs do not have a suffix
-
-        outputs = {"raw": []}
+        outputs = {}
         for i in range(0, total_rays, self.proc_bsz):
             batch_output = self.render_batch(rays[i:i + self.proc_bsz], **kwargs)
-            for k, v in batch_output["coarse"].items():
-                name = k + self.coarse_name 
-                if name not in outputs:
-                    outputs[name] = []
-                outputs[name].append(v)             
+            for k, v in batch_output.items():
+                if k not in outputs:
+                    outputs[k] = []
+                outputs[k].append(v)             
 
             if self.N_importance > 0:
                 for k, v in batch_output["fine"].items():
@@ -150,8 +138,7 @@ class VolumetricRenderer:
             if "raw" in batch_output:
                 outputs["raw"].append(batch_output["raw"])
     
-
-        outputs = {k: torch.cat(v, 0) for k, v in outputs.items() if v != []}
+        outputs = {k: torch.cat(v, 0) for k, v in outputs.items()}
         outputs = {k: torch.reshape(v, reshape_to + list(v.shape[1:])) for k, v in outputs.items()}
         # for k in outputs: 
         #     try: 
@@ -280,17 +267,14 @@ class VolumetricRenderer:
             fine_preds = self.raw2outputs(raw, z_vals, rays_d, 
                                             raw_noise_std=raw_noise_std)
 
-        ret = {
-            "coarse": {
-                "rgb_map": coarse_preds.rgb,
-                "depth_map": coarse_preds.depth,
-                "disparity_map": coarse_preds.disparity,
-                "accumulation_map": coarse_preds.accumulation,
-                "sparsity_loss": coarse_preds.sparsity_loss,
-            }
-        }
         if self.N_importance > 0:
-            ret["fine"] = {
+            ret = {
+                "rgb_map_0": coarse_preds.rgb,
+                "depth_map_0": coarse_preds.depth,
+                "disparity_map_0": coarse_preds.disparity,
+                "accumulation_map_0": coarse_preds.accumulation,
+                "sparsity_loss_0": coarse_preds.sparsity_loss,     
+
                 "rgb_map": fine_preds.rgb,
                 "depth_map": fine_preds.depth,
                 "disparity_map": fine_preds.disparity,
@@ -298,10 +282,18 @@ class VolumetricRenderer:
                 "sparsity_loss": fine_preds.sparsity_loss,
                 "z_std": torch.std(z_samples, dim=-1, unbiased=False) # (N_rays,)
             }
+        else: 
+            ret = {
+                "rgb_map": coarse_preds.rgb,
+                "depth_map": coarse_preds.depth,
+                "disparity_map": coarse_preds.disparity,
+                "accumulation_map": coarse_preds.accumulation,
+                "sparsity_loss": coarse_preds.sparsity_loss,
+            }
         if retraw:
             ret['raw'] = raw
     
-        debug_dict(ret)
+        # debug_dict(ret)
         return ret
 
     def raw2outputs(self, raw, z_vals, rays_d, raw_noise_std):
