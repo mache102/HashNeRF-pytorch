@@ -15,10 +15,7 @@ from trainers.equirect import EquirectTrainer
 from trainers.standard import StandardTrainer
 
 # 20231010 15:25
-np.random.seed(0)
-DEBUG = False
-
-   
+  
 def main():
     # load dataset
     dataset = load_data(args)
@@ -187,4 +184,7 @@ if __name__ == '__main__':
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
     main()

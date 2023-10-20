@@ -35,8 +35,8 @@ def prepare_rays(cc: CameraConfig,
     # we take note of the rays' shape 
     # prior to flattening 
     # for reshaping later
-    sh = rays_d.shape # [..., 3]
-    
+    # [..., 3]
+    reshape_to = list(rays_d.shape[:-1])
     # normalized device coordinates, for forward facing scenes
     if ndc:
         rays_o, rays_d = get_ndc_rays(cc.h, cc.w, focal=cc.k[0][0], 
@@ -52,5 +52,4 @@ def prepare_rays(cc: CameraConfig,
     if use_viewdirs:
         rays = torch.cat([rays, viewdirs], -1)
 
-    reshape_to = list(sh[:-1])
     return rays, reshape_to

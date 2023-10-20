@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pdb
 
-
 import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
@@ -26,7 +25,6 @@ class RayPredictions:
     weights: torch.Tensor
     sparsity_loss: torch.Tensor
 
-DEBUG = False
 class VolumetricRenderer:
     def __init__(self, cc: CameraConfig, 
                  models: dict, embedders: dict,
