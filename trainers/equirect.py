@@ -96,7 +96,7 @@ class EquirectTrainer(BaseTrainer):
 
         target = {
             "rgb_map": self.rays_train.rgb[start:end],
-            "depth_map": self.rays_train.depth[start:end],
+            "depth_map": self.rays_train.d[start:end], # d not depth?
             "accumulation_map": self.rays_train.gradient[start:end]
         }
         return batch, target

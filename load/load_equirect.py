@@ -15,7 +15,7 @@ class EquirectRays:
     d: List[any] = field(default_factory=list)
     rgb: List[any] = field(default_factory=list)
     depth: List[any] = field(default_factory=list)
-    g: Optional[List[any]] = None  # gradient (not present in the test set)
+    gradient: Optional[List[any]] = None  # gradient (not present in the test set)
 
 def concat_all(batch):
     """
@@ -84,7 +84,7 @@ def load_equirect_data(baseDir: str, stage=0):
     # image_coords = np.concatenate([image_coords, np.array([0.0, 0.0, 0.0]).reshape(1,3)])
     
     batch = EquirectRays()
-    batch.g = []
+    batch.gradient = []
     batch_test = EquirectRays()
     if stage > 0:
         if stage == 1:
@@ -121,7 +121,7 @@ def load_equirect_data(baseDir: str, stage=0):
                 batch.d.append(dir[mask>0])
                 batch.rgb.append(rgb[mask>0])
                 batch.depth.append(dep[mask>0])
-                batch.g.append(gradient[mask>0])
+                batch.gradient.append(gradient[mask>0])
 
             elif idx < 110:
                 batch_test.o.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
