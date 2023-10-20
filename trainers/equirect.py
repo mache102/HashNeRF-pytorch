@@ -76,7 +76,7 @@ class EquirectTrainer(BaseTrainer):
 
             # optimize
             rays, reshape_to = prepare_rays(self.cc, rays=[batch["o"], batch["d"]], 
-                                            ndc=self.args.ndc, use_viewdirs=self.args.use_viewdirs)
+                                            ndc=False, use_viewdirs=self.args.use_viewdirs)
             preds, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
             loss, psnr, psnr_0 = self.calc_loss(preds, targets, extras)
             self.update_lr()
@@ -223,9 +223,8 @@ class EquirectTrainer(BaseTrainer):
             start = idx * batch
             end = (idx + 1) * batch
             rays, reshape_to = \
-                prepare_rays(self.cc, 
-                                  rays=[rays_o[start:end], rays_d[start:end]], 
-                                  ndc=self.args.ndc)
+                prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
+                                  ndc=False)
             preds, extras = \
                 self.volren.render(rays=rays, reshape_to=reshape_to)
             
