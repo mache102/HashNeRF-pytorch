@@ -154,6 +154,7 @@ class VolumetricRenderer:
         pos = pos_.reshape(-1, pos_.shape[-1])
         pos_embed, keep_mask = self.embedders["pos"](pos)
 
+        print(inputs.get("dir"))
         if inputs.get("dir") is not None:
             dir = inputs["dir"]
             dir = dir[:, None].expand(pos.shape)
@@ -161,6 +162,8 @@ class VolumetricRenderer:
             dir_embed = self.embedders["dir"](dir)
 
             embeds = torch.cat([pos_embed, dir_embed], -1)
+        else:
+            embeds = pos_embed
 
         outputs = []
         for i in range(0, embeds.shape[0], self.net_bsz):
