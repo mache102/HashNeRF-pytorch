@@ -115,6 +115,7 @@ class EquirectTrainer(BaseTrainer):
 
         # final psnr
         # print(rgb.shape, t_rgb.shape)
+        self.optimizer.zero_grad()
         rgb_loss = img2mse(rgb, t_rgb)
         psnr = mse2psnr(rgb_loss)
         loss = rgb_loss
@@ -224,7 +225,7 @@ class EquirectTrainer(BaseTrainer):
             end = (idx + 1) * batch
             rays, reshape_to = \
                 prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
-                                  ndc=False)
+                             ndc=False)
             preds, extras = \
                 self.volren.render(rays=rays, reshape_to=reshape_to)
             
