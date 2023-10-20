@@ -311,7 +311,7 @@ class VolumetricRenderer:
 
         rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
         noise = 0.
-        if self.raw_noise_std > 0.: # sigma
+        if raw_noise_std > 0.: # sigma
             noise = torch.randn(raw[...,3].shape) * raw_noise_std
 
         # sigma_loss = sigma_sparsity_loss(raw[...,3])

@@ -93,7 +93,9 @@ def all_to_tensor(rays, device):
             rays.__dict__[key] = torch.Tensor(value).to(device)
     return rays
 
-def shuffle_rays(rays):
+def shuffle_rays(rays, seed=None):
+    if seed is not None:
+        torch.manual_seed(seed)
     perm_anchor = rays.rgb 
     rand_idx = torch.randperm(perm_anchor.shape[0])
 
