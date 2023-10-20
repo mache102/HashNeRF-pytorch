@@ -108,7 +108,7 @@ if __name__ == '__main__':
     from tqdm import trange
     import asyncio
 
-    url = "https://www.google.com/maps/@37.4237749,-121.8895998,18.75z?entry=ttu"
+    url = "https://www.google.com/maps/@37.4237922,-121.8896494,19.31z?entry=ttu"
     save_dir = "../imgs/pn_cluster_test/"
     os.makedirs(save_dir, exist_ok=True)
 

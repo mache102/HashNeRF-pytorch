@@ -33,9 +33,12 @@ def get_pano_id(url):
     pano_id = pattern.search(url).group(1)
     return pano_id
 
+# T&NO junction (houston)
 # url = "https://www.google.com/maps/@29.6950438,-95.3274211,3a,75y,225.52h,96.09t/data=!3m6!1e1!3m4!1sGo1mMho-l5se_RBtFpfgZA!2e0!7i16384!8i8192?entry=ttu"
-url = "https://www.google.com/maps/@37.4282039,-121.8883669,3a,53.9y,355.03h,83t/data=!3m7!1e1!3m5!1sAj12is2gFFmxjPLaIwpFcQ!2e0!5s20200301T000000!7i16384!8i8192?entry=ttu"
-
+# wrigley way (milpitas)
+# url = "https://www.google.com/maps/@37.4282039,-121.8883669,3a,53.9y,355.03h,83t/data=!3m7!1e1!3m5!1sAj12is2gFFmxjPLaIwpFcQ!2e0!5s20200301T000000!7i16384!8i8192?entry=ttu"
+# yosemite dr crossing 2 from the west (milpitas)
+url = "https://www.google.com/maps/@37.4237212,-121.889501,3a,84.1y,32.29h,95.01t/data=!3m7!1e1!3m5!1sW_Qj5Hvcs1BEei6mNLgzgg!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fpanoid%3DW_Qj5Hvcs1BEei6mNLgzgg%26cb_client%3Dmaps_sv.tactile.gps%26w%3D203%26h%3D100%26yaw%3D85.69228%26pitch%3D0%26thumbfov%3D100!7i16384!8i8192?entry=ttu"
 pano_id = get_pano_id(url)
 print(pano_id)
 
@@ -281,8 +284,6 @@ finally concat to create a comprehensive list of camera poses
 """
 cam_pos = np.concatenate([cam_pos, test_pos, np.array([0.0, 0.0, 0.0]).reshape(1,3)])
 
-
-exit()
 # poses = 90
 # radius = 0.3
 
