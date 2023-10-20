@@ -111,7 +111,7 @@ def psnr(pred_img, gt_img):
     return -10. * np.log10(np.mean(np.square(pred_img - gt_img)))
 
 def img2mse(x, y):
-    return np.mean((x - y) ** 2)
+    return torch.mean((x - y) ** 2)
 
 def mse2psnr(x):
     return -10. * torch.log(x) / torch.log(torch.Tensor([10.]))

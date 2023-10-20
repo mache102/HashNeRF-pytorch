@@ -127,24 +127,43 @@ class VolumetricRenderer:
         """
         total_rays = rays.shape[0]
 
-        outputs = {}
+        # coarse_name is _0 if fine is used
+        # other wise just empty string
+        # so any prelim outputs are referred to with _0
+        # and final outputs do not have a suffix
+
+        outputs = {"raw": []}
         for i in range(0, total_rays, self.proc_bsz):
             batch_output = self.render_batch(rays[i:i + self.proc_bsz], **kwargs)
-            for k in batch_output["coarse"]:
-                outputs[k + self.coarse_name].setdefault(k, []).append(batch_output[k])
-            if self.N_importance > 0:
-                for k in batch_output["fine"]:
-                    outputs[k].setdefault(k, []).append(batch_output[k])
-            outputs["raw"].append(batch_output["raw"])
+            for k, v in batch_output["coarse"].items():
+                name = k + self.coarse_name 
+                if name not in outputs:
+                    outputs[name] = []
+                outputs[name].append(v)             
 
-        outputs = {k: torch.cat(outputs[k], 0) for k in outputs}
+            if self.N_importance > 0:
+                for k, v in batch_output["fine"].items():
+                    if k not in outputs:
+                        outputs[k] = []
+                    outputs[k].append(v)                      
+            
+            if "raw" in batch_output:
+                outputs["raw"].append(batch_output["raw"])
+    
+
+        outputs = {k: torch.cat(v, 0) for k, v in outputs.items() if v != []}
         outputs = {k: torch.reshape(v, reshape_to + list(v.shape[1:])) for k, v in outputs.items()}
+        # for k in outputs: 
+        #     try: 
+        #         print(k, outputs[k].shape, outputs[k][:10])
+        #     except AttributeError:
+        #         continue
 
         priority = ['rgb_map', 'depth_map', 'accumulation_map']
 
         ret_main = {k: outputs[k] for k in priority}
         ret_extra = {k: outputs[k] for k in outputs if k not in priority}
-        return ret_main + ret_extra
+        return ret_main, ret_extra
 
     def run_network(self, inputs, model_name):
         """
@@ -154,10 +173,11 @@ class VolumetricRenderer:
         pos = pos_.reshape(-1, pos_.shape[-1])
         pos_embed, keep_mask = self.embedders["pos"](pos)
 
-        print(inputs.get("dir"))
         if inputs.get("dir") is not None:
             dir = inputs["dir"]
-            dir = dir[:, None].expand(pos.shape)
+            # expand with the original pos input shape!
+            # mistakenly used pos instead of pos_
+            dir = dir[:, None].expand(pos_.shape) 
             dir = dir.reshape(-1, dir.shape[-1])
             dir_embed = self.embedders["dir"](dir)
 
@@ -174,8 +194,8 @@ class VolumetricRenderer:
         outputs = torch.reshape(outputs, list(pos_.shape[:-1]) + [outputs.shape[-1]])
         return outputs
     
-    def render_batch(self, rays, 
-                     verbose=False, retraw=False, test=False):
+    def render_batch(self, rays, verbose=False, 
+                     retraw=False, test=False):
         """
         Volumetric rendering for a single batch.
 

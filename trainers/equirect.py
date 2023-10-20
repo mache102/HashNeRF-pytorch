@@ -75,12 +75,12 @@ class EquirectTrainer(BaseTrainer):
                 self.next_batch_idx = 0 # reset
 
             # optimize
-            rays, reshape_to = prepare_rays(self.cc,
-                                            rays=[batch["o"], batch["d"]], ndc=self.args.ndc)
+            rays, reshape_to = prepare_rays(self.cc, rays=[batch["o"], batch["d"]], 
+                                            ndc=self.args.ndc, use_viewdirs=self.args.use_viewdirs)
             preds, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
             loss, psnr, psnr_0 = self.calc_loss(preds, targets, extras)
             self.update_lr()
-            self.log_progress()
+            self.log_progress(iter)
 
             if iter % self.args.i_print == 0:
                 tqdm.write(f"[TRAIN] Iter: {iter} Loss: {loss.item()}  PSNR: {psnr.item()}")
@@ -114,6 +114,7 @@ class EquirectTrainer(BaseTrainer):
         t_gradient = targets["accumulation_map"]
 
         # final psnr
+        # print(rgb.shape, t_rgb.shape)
         rgb_loss = img2mse(rgb, t_rgb)
         loss = rgb_loss
         # depth_loss
@@ -187,7 +188,7 @@ class EquirectTrainer(BaseTrainer):
         os.makedirs(test_fp, exist_ok=True)
         with torch.no_grad():
             rgbs, _ = self.render_save(self.rays_test.o, self.rays_test.d, 
-                                        savepath=test_fp, render_factor=self.args.render_factor)
+                                        savepath=test_fp)
         print('Done rendering', test_fp)
 
         # calculate MSE and PSNR for last image(gt pose)
