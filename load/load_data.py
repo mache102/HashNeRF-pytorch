@@ -31,7 +31,9 @@ def load_data(args):
     """
         
     if args.dataset_type == 'equirect':
+        print("Data type: Equirectangular")
         rays, rays_test, h, w = load_equirect_data(args.datadir, args.stage)
+        print(f"Loaded equirectangular; h: {h}, w: {w}")
 
         near, far = 0.0, 2.0
         bbox = (torch.tensor([-1.5, -1.5, -1.0]), torch.tensor([1.5, 1.5, 1.0]))
@@ -41,13 +43,13 @@ def load_data(args):
                                   rays_test=rays_test, bbox=bbox)
         
     elif args.dataset_type == 'llff':
+        print("Data type: LLFF")
         images, poses, bds, render_poses, i_test, bounding_box = load_llff_data(args.datadir, args.factor,
                                                                   recenter=True, bd_factor=.75,
                                                                   spherify=args.spherify)
         hwf = poses[0,:3,-1]
         poses = poses[:,:3,:4]
-        print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
-
+        print(f'Loaded LLFF; Images: {images.shape}, Poses: {poses.shape}, HWF: {hwf}')
         if not isinstance(i_test, list):
             i_test = [i_test]
 
@@ -75,8 +77,9 @@ def load_data(args):
                                   train=i_train, val=i_val, test=i_test)
         
     elif args.dataset_type == 'blender':
+        print("Data type: Blender")
         images, poses, render_poses, hwf, i_split, bounding_box = load_blender_data(args.datadir, args.half_res, args.testskip)
-        print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
+        print(f'Loaded Blender; Images: {images.shape}, Poses: {poses.shape}, HWF: {hwf}')
         i_train, i_val, i_test = i_split
 
         near = 2.
@@ -94,10 +97,10 @@ def load_data(args):
                                   bbox=bounding_box,
                                   train=i_train, val=i_val, test=i_test)
 
-        
     elif args.dataset_type == 'scannet':
+        print("Data type: Scannet")
         images, poses, render_poses, hwf, i_split, bounding_box = load_scannet_data(args.datadir, args.scannet_sceneID, args.half_res)
-        print('Loaded scannet', images.shape, render_poses.shape, hwf, args.datadir)
+        print(f'Loaded Scannet; Images: {images.shape}, Poses: {poses.shape}, HWF: {hwf}')
         i_train, i_val, i_test = i_split
 
         near = 0.1
@@ -110,8 +113,8 @@ def load_data(args):
                                   bbox=bounding_box,
                                   train=i_train, val=i_val, test=i_test)
 
-        
     elif args.dataset_type == 'LINEMOD':
+        print("Data type: LINEMOD")
         images, poses, render_poses, hwf, K, i_split, near, far = load_LINEMOD_data(args.datadir, args.half_res, args.testskip)
         print(f'Loaded LINEMOD, images shape: {images.shape}, hwf: {hwf}, K: {K}')
         print(f'[CHECK HERE] near: {near}, far: {far}.')
@@ -130,12 +133,12 @@ def load_data(args):
                                   train=i_train, val=i_val, test=i_test)
         
     elif args.dataset_type == 'deepvoxels':
-
+        print("Data type: DeepVoxels")
         images, poses, render_poses, hwf, i_split = load_dv_data(scene=args.shape,
                                                                  basedir=args.datadir,
                                                                  testskip=args.testskip)
-
-        print('Loaded deepvoxels', images.shape, render_poses.shape, hwf, args.datadir)
+        print(f'Loaded DeepVoxels; Images: {images.shape}, Poses: {poses.shape}, HWF: {hwf}')
+        # print('Loaded deepvoxels', images.shape, render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
         hemi_R = np.mean(np.linalg.norm(poses[:,:3,-1], axis=-1))
@@ -151,4 +154,6 @@ def load_data(args):
     else:
         raise NotImplementedError(f'Unknown dataset type: {args.dataset_type}')
         
+    print("Camera Config:")
+    print(dataset.cc)
     return dataset
