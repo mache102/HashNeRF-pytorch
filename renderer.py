@@ -385,7 +385,8 @@ class VolumetricRenderer:
     #     samples = bins_g[...,0] + (u-cdf_g[...,0])/denom * (bins_g[...,1]-bins_g[...,0])
     #     return samples
 
-    def sample_pdf(self, bins, weights, N_samples, det=False):
+    def sample_pdf(self, bins, weights, det=False):
+        N_samples = self.N_importance
         # Get pdf
         weights = weights + 1e-5 # prevent nans
         pdf = weights / torch.sum(weights, -1, keepdim=True)
