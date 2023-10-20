@@ -179,7 +179,7 @@ def save_imgs(rgb, depth, idx, savepath,
     else:
         raise NotImplementedError
     
-def get_embedder(name, args, multires=None):
+def get_embedder(name, args, multires=None, bbox=None):
     """
     none: no embedding
     pos: Standard positional encoding (Nerf, section 5.1)
@@ -188,7 +188,7 @@ def get_embedder(name, args, multires=None):
     """
     if name == "none":
         return nn.Identity(), 3
-    elif name == "positional":
+    elif name == "pos":
         assert multires is not None
         embed_kwargs = {
                     'include_input' : True,
@@ -203,12 +203,15 @@ def get_embedder(name, args, multires=None):
         embed = lambda x, eo=embedder_obj : eo.embed(x)
         out_dim = embedder_obj.out_dim
     elif name == "hash":
-        embed = HashEmbedder(bounding_box=args.bounding_box, \
+        assert bbox is not None
+        embed = HashEmbedder(bounding_box=bbox, \
                             log2_hashmap_size=args.log2_hashmap_size, \
                             finest_resolution=args.finest_res)
         out_dim = embed.out_dim
     elif name == "sh":
         embed = SHEncoder()
         out_dim = embed.out_dim
+    else:
+        raise ValueError(f"Invalid embedding type {name}")
 
     return embed, out_dim

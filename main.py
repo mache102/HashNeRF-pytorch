@@ -46,7 +46,8 @@ def main():
     }
     # input ch as in model input ch
     embedders["pos"], input_ch = get_embedder(name=args.i_embed, args=args, 
-                                              multires=args.multires)
+                                              multires=args.multires,
+                                              bbox=dataset.bbox)
     if args.i_embed == 'hash':
         # hashed embedding table
         pos_embedder_params = list(embedders["pos"].parameters())
@@ -55,7 +56,8 @@ def main():
     if args.use_viewdirs:
         # if using hashed for xyz, use SH for views
         embedders["dir"], input_ch_views = get_embedder(name=args.i_embed_views,
-                                                        args=args, multires=args.multires_views)
+                                                        args=args, multires=args.multires_views,
+                                                        bbox=dataset.bbox)
 
     """
     Create coarse and fine models
@@ -69,7 +71,7 @@ def main():
                                 input_ch_views=input_ch_views).to(device)
         
     elif not args.use_gradient:
-        if args.importance > 0:
+        if args.N_importance > 0:
             model_config["coarse"]["output_ch"] += 1
             model_config["fine"]["output_ch"] += 1
         model_coarse = VanillaNeRF(model_config["coarse"], input_ch=input_ch, 

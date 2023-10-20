@@ -5,13 +5,10 @@ BaseModel for training
 from tqdm import trange
 from abc import ABC, abstractmethod
 
-
 class BaseTrainer(ABC):
-    @abstractmethod
     def __init__(self):
         pass
-
-    @abstractmethod 
+     
     def unpack_cc(self, cc):
         """
         Unpack camera configs
@@ -24,14 +21,13 @@ class BaseTrainer(ABC):
         far: float, Far plane
         """
         self.cc = cc 
-        self.h = cc.h
-        self.w = cc.w
+        self.h = cc.height
+        self.w = cc.width
         self.focal = cc.focal
         self.k = cc.k
         self.near = cc.near
         self.far = cc.far
-
-    @abstractmethod
+ 
     def fit(self):
         """
         training loop
@@ -44,42 +40,36 @@ class BaseTrainer(ABC):
             self.update_lr()
             self.log_progress()
         
-    @abstractmethod
     def get_batch(self):
         """
         retrieve a single batch of data
         """
         pass
 
-    @abstractmethod
     def shuffle(self):
         """
         shuffle data
         """
         pass
 
-    @abstractmethod
     def optimize(self):
         """
         pass data to model and optimize
         """
         pass
 
-    @abstractmethod
     def calc_loss(self):
         """
         calculate loss(es)
         """
         pass
 
-    @abstractmethod
     def update_lr(self):
         """
         update learning rate
         """
         pass
 
-    @abstractmethod
     def log_progress(self):
         """
         log progress

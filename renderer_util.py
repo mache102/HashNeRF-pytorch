@@ -16,7 +16,7 @@ def prepare_rays(cc: CameraConfig,
     """
     if c2w is not None:
         # special case to render full image
-        rays_o, rays_d = get_rays(cc.h, cc.w, c2w, 
+        rays_o, rays_d = get_rays(cc.height, cc.width, c2w, 
                                   focal=cc.focal, K=cc.k)
     else:
         # use provided ray batch
@@ -28,7 +28,8 @@ def prepare_rays(cc: CameraConfig,
         viewdirs = rays_d
         if c2w_staticcam is not None:
             # special case to visualize effect of viewdirs
-            rays_o, rays_d = get_rays(cc.h, cc.w, c2w_staticcam, focal=cc.focal, K=cc.k)
+            rays_o, rays_d = get_rays(cc.height, cc.width, 
+                                      c2w_staticcam, focal=cc.focal, K=cc.k)
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
         viewdirs = viewdirs.reshape(-1,3).float()
 
@@ -39,7 +40,7 @@ def prepare_rays(cc: CameraConfig,
     reshape_to = list(rays_d.shape[:-1])
     # normalized device coordinates, for forward facing scenes
     if ndc:
-        rays_o, rays_d = get_ndc_rays(cc.h, cc.w, focal=cc.k[0][0], 
+        rays_o, rays_d = get_ndc_rays(cc.height, cc.width, focal=cc.k[0][0], 
                                         near=1., rays_o=rays_o, rays_d=rays_d)
 
     # Create ray batch

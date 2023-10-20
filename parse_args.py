@@ -55,9 +55,9 @@ def config_parser():
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true',
                         help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=int, default="pos",
+    parser.add_argument("--i_embed", type=str, default="pos",
                         help='none: none, pos: positional encoding, hash: hash encoding, sh: spherical harmonics')
-    parser.add_argument("--i_embed_views", type=int, default="pos",
+    parser.add_argument("--i_embed_views", type=str, default="pos",
                         help='none: none, pos: positional encoding, hash: hash encoding, sh: spherical harmonics')
     parser.add_argument("--multires", type=int, default=10,
                         help='log2 of max freq for positional encoding (3D location)')
