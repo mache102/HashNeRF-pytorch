@@ -262,13 +262,11 @@ class VolumetricRenderer:
             ret = {
                 "rgb_map_0": coarse_preds.rgb,
                 "depth_map_0": coarse_preds.depth,
-                "disparity_map_0": coarse_preds.disparity,
                 "accumulation_map_0": coarse_preds.accumulation,
                 "sparsity_loss_0": coarse_preds.sparsity_loss,     
 
                 "rgb_map": fine_preds.rgb,
                 "depth_map": fine_preds.depth,
-                "disparity_map": fine_preds.disparity,
                 "accumulation_map": fine_preds.accumulation,
                 "sparsity_loss": fine_preds.sparsity_loss,
                 "z_std": torch.std(z_samples, dim=-1, unbiased=False) # (N_rays,)
@@ -277,7 +275,6 @@ class VolumetricRenderer:
             ret = {
                 "rgb_map": coarse_preds.rgb,
                 "depth_map": coarse_preds.depth,
-                "disparity_map": coarse_preds.disparity,
                 "accumulation_map": coarse_preds.accumulation,
                 "sparsity_loss": coarse_preds.sparsity_loss,
             }
@@ -312,6 +309,7 @@ class VolumetricRenderer:
         dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, N_samples]
         dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
 
+        rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
         noise = 0.
         if self.raw_noise_std > 0.: # sigma
             noise = torch.randn(raw[...,3].shape) * raw_noise_std
@@ -322,12 +320,12 @@ class VolumetricRenderer:
 
         ones = torch.ones((alpha.shape[0], 1))
         weights = alpha * torch.cumprod(torch.cat([ones, 1.-alpha + 1e-10], -1), -1)[:, :-1]
-        accumulation_map = torch.sum(weights, -1)
+        rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]      
+
         depth_map = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
         disparity_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map)
-
-        rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
-        rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
+        accumulation_map = torch.sum(weights, -1)
+        
         if self.white_bkgd:
             rgb_map = rgb_map + (1. - accumulation_map[...,None])
 
