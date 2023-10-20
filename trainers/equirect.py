@@ -223,12 +223,13 @@ class EquirectTrainer(BaseTrainer):
             start = idx * batch
             end = (idx + 1) * batch
             rays, reshape_to = \
-                self.prepare_rays(self.cc, 
+                prepare_rays(self.cc, 
                                   rays=[rays_o[start:end], rays_d[start:end]], 
                                   ndc=self.args.ndc)
-            rgb, depth, _, _ = \
+            preds, extras = \
                 self.volren.render(rays=rays, reshape_to=reshape_to)
             
+            rgb, depth = preds["rgb_map"], preds["depth_map"]
             if idx == 0:
                 print(rgb.shape, depth.shape)
             rgb = rgb.reshape(h, w, 3).cpu().numpy()
