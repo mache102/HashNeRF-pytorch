@@ -103,7 +103,7 @@ def load_data(args):
         near = 0.1
         far = 10.0
 
-        cc = CameraConfig(height=hwf[1], width=hwf[0], focal=hwf[2],,
+        cc = CameraConfig(height=hwf[1], width=hwf[0], focal=hwf[2],
                             near=near, far=far)
         dataset = StandardDataset(cc=cc, images=images, poses=poses,
                                   render_poses=render_poses,
