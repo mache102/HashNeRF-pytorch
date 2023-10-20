@@ -144,8 +144,8 @@ def debug_dict(d, name="dict", depth=0):
 # x = {"a": torch.randn(3,3), "b": {"c": torch.Tensor([np.inf]), "d": torch.randn(3,3), "e": {"f": torch.randn(3,3)}}, "nan_val": torch.Tensor([np.nan])}
 # debug_dict(x)
 
-def save_imgs(self, rgb, depth, savepath, i,
-                method="imageio"):
+def save_imgs(rgb, depth, idx, savepath,
+            method="imageio"):
     """
     save rgb and depth as a figure
     """
@@ -153,10 +153,10 @@ def save_imgs(self, rgb, depth, savepath, i,
         return 
     
     if method == "imageio":
-        fn = os.path.join(savepath, f'rgb_{i:03d}.png')
+        fn = os.path.join(savepath, f'rgb_{idx:03d}.png')
         imageio.imwrite(fn, to_8b(rgb))
     
-        fn = os.path.join(savepath, f'd_{i:03d}.png')
+        fn = os.path.join(savepath, f'd_{idx:03d}.png')
         imageio.imwrite(fn, to_8b(depth))     
     
     elif method == "matplotlib":
@@ -170,7 +170,7 @@ def save_imgs(self, rgb, depth, savepath, i,
         ax.imshow(depth, cmap='plasma', vmin=0, vmax=1)
         ax.axis('off')
 
-        fn = os.path.join(savepath, f'{i:03d}.png')
+        fn = os.path.join(savepath, f'{idx:03d}.png')
         plt.savefig(fn, bbox_inches='tight', pad_inches=0)
         plt.close(fig)
     else:

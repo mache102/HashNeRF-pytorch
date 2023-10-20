@@ -24,9 +24,8 @@ from load.load_data import load_data
 from util import create_expname, all_to_tensor, shuffle_rays, to_8b, save_configs
 from parse_args import config_parser
 
-from util import img2mse, mse2psnr
-
-from dataclasses import dataclass 
+from trainers.equirect import EquirectTrainer 
+from trainers.standard import StandardTrainer
 
 # 20231010 15:25
 np.random.seed(0)
@@ -152,50 +151,43 @@ def main():
         if args.i_embed==1:
             embedders["pos"].load_state_dict(ckpt['pos_embedder_state_dict'])
 
+    args.global_step = global_step
     """
     Create trainer
     """
     if args.dataset_type == "equirect":
-        trainer = EquirectTrainer(dataset=dataset, start=global_step,
-                                  models=models, optimizer=optimizer,
-                                  embedders=embedders, args=args)
+        tclass = EquirectTrainer 
     else:
-        trainer = StandardTrainer(dataset=dataset, start=global_step,
-                                  models=models, optimizer=optimizer,
-                                  embedders=embedders, args=args)
+        tclass = StandardTrainer
+    trainer = tclass(dataset=dataset, models=models, 
+                     optimizer=optimizer, embedders=embedders, 
+                     args=args)
+
     """
     Skip to render only
     """
     if args.render_only:
-        print('RENDER ONLY')
-        with torch.no_grad():
-            if args.dataset_type == 'equirect':
-                if args.stage > 0:
-                    testsavedir = os.path.join(savepath, 'renderonly_stage_{}_{:06d}'.format(args.stage, start))
-                else:
-                    testsavedir = os.path.join(savepath, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', start))
+        render_only(trainer)
+        return 
+    
+    """
+    Training loop
+    """
+    trainer.fit()
 
-                eval_test_omninerf(renderer, savedir=testsavedir, rays_test=rays_test)
-            else:
-                if args.render_test:
-                    # render_test switches to test poses
-                    images = images[i_test]
-                else:
-                    # Default is smoother render_poses path
-                    images = None
+def render_only(trainer):
+    print('RENDER ONLY')
+    if args.dataset_type == 'equirect':
+        if args.stage > 0:
+            test_fp = os.path.join(args.savepath, 'renderonly_stage_{}_{:06d}'.format(args.stage, args.global_step))
+        else:
+            test_fp = os.path.join(args.savepath, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', args.global_step))
+    else:
+        test_fp = os.path.join(args.savepath, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', args.global_step))    
 
-                testsavedir = os.path.join(savepath, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
-                os.makedirs(testsavedir, exist_ok=True)
-                print('test poses shape', render_poses.shape)
+    trainer.eval_test(test_fp)
 
-                rgbs, _ = renderer.render_path(render_poses gt_imgs=images, savedir=testsavedir, 
-                            render_factor=args.render_factor)
-                print('Done rendering', testsavedir)
-                imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to_8b(rgbs), duration=1000//30, quality=8)
-
-            return
-
-if __name__=='__main__':
+if __name__ == '__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
     parser = config_parser()

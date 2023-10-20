@@ -243,14 +243,8 @@ class StandardTrainer(BaseTrainer):
         RENDER TEST SET
         """
         if iter % self.args.i_testset == 0 and iter > 0:
-            testsavepath = os.path.join(self.savepath, 'testset_{:06d}'.format(iter))
-            os.makedirs(testsavepath, exist_ok=True)
-            print('test poses shape', self.poses[self.i_test].shape)
-            with torch.no_grad():
-                self.render_save(torch.Tensor(self.poses[self.i_test]).to(device), 
-                                    gt_imgs=self.images[self.i_test], 
-                                    savepath=testsavepath)
-            print('Saved test set')
+            test_fp = os.path.join(self.savepath, 'testset_{:06d}'.format(iter))
+            self.eval_test(test_fp)
 
         """
         PRINT TRAINING PROGRESS
@@ -268,11 +262,37 @@ class StandardTrainer(BaseTrainer):
             with open(os.path.join(self.savepath, "loss_vs_time.pkl"), "wb") as fp:
                 pickle.dump(loss_psnr_time, fp)
 
-    def render_save(self, poses, gt_imgs=None, 
+    def eval_test(self, test_fp):
+        os.makedirs(test_fp, exist_ok=True)
+        if self.args.render_test:
+            # render_test switches to test poses
+            images = self.images[self.i_test]
+            poses = torch.Tensor(self.poses[self.i_test]).to(device)
+        else:
+            # Default is smoother render_poses path
+            images = None
+            poses = self.render_poses
+        print('test poses shape', self.render_poses.shape)
+
+        # torch.Tensor(self.poses[self.i_test]).to(device) as poses
+        with torch.no_grad():
+            rgbs, _ = self.render_path(poses=poses, gt_imgs=images, savepath=test_fp, 
+                                        render_factor=self.args.render_factor)
+        print('Done rendering', test_fp)
+        imageio.mimwrite(os.path.join(test_fp, 'video.mp4'), to_8b(rgbs), duration=1000//30, quality=8)
+
+
+    def render_save(self, poses=None, gt_imgs=None, 
+                    savepath=None,
                     render_factor=1, test=True):
         """
         Rendering for test set
         """
+        if savepath is None:
+            return 
+        
+        if poses is None:
+            poses = self.render_poses
         rgbs = []
         depths = []
         psnrs = []
@@ -282,14 +302,14 @@ class StandardTrainer(BaseTrainer):
 
         self.volren.h *= render_factor 
         self.volren.w *= render_factor
-        for i in trange(len(poses)):
-            c2w = poses[i]
+        for idx in trange(len(poses)):
+            c2w = poses[idx]
 
             rgb, depth, _, _ = \
                 self.volren.render(*prepare_rays(cc=self.cc, 
                                                  c2w=c2w[:3,:4], 
                                                  use_viewdirs=self.args.use_viewdirs))
-            if i == 0:
+            if idx == 0:
                 print(rgb.shape, depth.shape)
 
             rgb = rgb.cpu().numpy()
@@ -299,14 +319,14 @@ class StandardTrainer(BaseTrainer):
 
             if gt_imgs is not None and render_factor == 1:
                 try:
-                    gt_img = gt_imgs[i].cpu().numpy()
+                    gt_img = gt_imgs[idx].cpu().numpy()
                 except:
-                    gt_img = gt_imgs[i]
+                    gt_img = gt_imgs[idx]
                 
                 p = psnr(rgb, gt_img)
                 psnrs.append(p)
 
-            save_imgs(rgb, depth, self.args.savepath, i)         
+            save_imgs(rgb, depth, idx, savepath)         
 
         rgbs = np.stack(rgbs, 0)
         depths = np.stack(depths, 0)

@@ -19,8 +19,8 @@ from trainers.base import BaseTrainer
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class EquirectTrainer(BaseTrainer):
-    def __init__(self, dataset: EquirectDataset, start,
-                 models: dict, optimizer: torch.optim.Optimizer,
+    def __init__(self, dataset: EquirectDataset, models: dict, 
+                 optimizer: torch.optim.Optimizer,
                  embedders: dict, args: argparse.Namespace):
 
         self.args = args
@@ -45,8 +45,8 @@ class EquirectTrainer(BaseTrainer):
 
         self.N_rand = args.N_rand
         self.i_batch = 0
-        self.global_step = start
-        self.start = start + 1
+        self.global_step = args.global_step
+        self.start = self.global_step + 1
         self.end = args.N_iters
 
     def unpack_dataset(self, dataset):
@@ -79,7 +79,7 @@ class EquirectTrainer(BaseTrainer):
             # optimize
             rays, reshape_to = prepare_rays(rays=[batch_o, batch_d], ndc=self.args.ndc)
             rgb, depth, gradient, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
-            loss, psnr = self.calc_loss(rgb, target_rgb, 
+            loss, psnr, psnr_0 = self.calc_loss(rgb, target_rgb, 
                                         depth, target_depth, 
                                         gradient, target_gradient, 
                                         extras)
@@ -89,7 +89,7 @@ class EquirectTrainer(BaseTrainer):
             if iter % self.args.i_print == 0:
                 tqdm.write(f"[TRAIN] Iter: {iter} Loss: {loss.item()}  PSNR: {psnr.item()}")
 
-            global_step += 1
+            self.global_step += 1
 
 
     def get_batch(self, start, end):   
@@ -173,29 +173,38 @@ class EquirectTrainer(BaseTrainer):
         
         if iter % self.args.i_testset == 0 and iter > 0:
             if self.args.stage > 0:
-                test_savepath = os.path.join(self.savepath, 'stage{}_test_{:06d}'.format(self.args.stage, iter))
+                test_fp = os.path.join(self.savepath, 'stage{}_test_{:06d}'.format(self.args.stage, iter))
             else:
-                test_savepath = os.path.join(self.savepath, 'testset_{:06d}'.format(iter))
-            os.makedirs(test_savepath, exist_ok=True)
-            with torch.no_grad():
-                rgbs, _ = self.render_save(self.rays_test.o, self.rays_test.d, 
-                                           savedir=test_savepath, render_factor=self.args.render_factor)
-            print('Done rendering', test_savepath)
+                test_fp = os.path.join(self.savepath, 'testset_{:06d}'.format(iter))
+
+            self.eval_test(test_fp)
             
-            # calculate MSE and PSNR for last image(gt pose)
-            gt_loss = img2mse(torch.tensor(rgbs[-1]), torch.tensor(self.rays_test.rgb[-1]))
-            gt_psnr = mse2psnr(gt_loss)
-            print('ground truth loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
-            with open(os.path.join(test_savepath, 'statistics.txt'), 'w') as f:
-                f.write('loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
-            
-            rgbs = np.concatenate([rgbs[:-1],rgbs[:-1][::-1]])
-            imageio.mimwrite(os.path.join(test_savepath, 'video2.gif'), to_8b(rgbs), duration=1000//10)
-            print('Saved test set')   
-            
-    def render_save(self, rays_o, rays_d, savedir):
+    def eval_test(self, test_fp):
         """
-        Render to save path - equirect
+        Testing set evaluation.
+        """
+        os.makedirs(test_fp, exist_ok=True)
+        with torch.no_grad():
+            rgbs, _ = self.render_save(self.rays_test.o, self.rays_test.d, 
+                                        savepath=test_fp, render_factor=self.args.render_factor)
+        print('Done rendering', test_fp)
+
+        # calculate MSE and PSNR for last image(gt pose)
+        gt_loss = img2mse(torch.tensor(rgbs[-1]), torch.tensor(self.rays_test.rgb[-1]))
+        gt_psnr = mse2psnr(gt_loss)
+        print('ground truth loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
+        with open(os.path.join(test_fp, 'statistics.txt'), 'w') as f:
+            f.write('loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
+
+        rgbs = np.concatenate([rgbs[:-1],rgbs[:-1][::-1]])
+        imageio.mimwrite(os.path.join(test_fp, 'video2.gif'), to_8b(rgbs), duration=1000//10)
+        print('Saved test set')   
+
+    def render_save(self, rays_o, rays_d, savepath):
+        """
+        Render to save path
+
+        func for eval_test
         """
         rgbs = []
         depths = []
@@ -208,16 +217,16 @@ class EquirectTrainer(BaseTrainer):
 
 
         batch = h * w    
-        for i in trange(rays_o.shape[0] // batch):
-            start = i * batch
-            end = (i + 1) * batch
+        for idx in trange(rays_o.shape[0] // batch):
+            start = idx * batch
+            end = (idx + 1) * batch
             rays, reshape_to = self.prepare_rays(rays=[rays_o[start:end], 
                                                         rays_d[start:end]], 
                                                     ndc=False)
             rgb, depth, _, _ = \
                 self.volren.render(rays=rays, reshape_to=reshape_to)
             
-            if i == 0:
+            if idx == 0:
                 print(rgb.shape, depth.shape)
             rgb = rgb.reshape(h, w, 3).cpu().numpy()
             rgbs.append(rgb)
@@ -225,8 +234,8 @@ class EquirectTrainer(BaseTrainer):
             depth = depth.reshape(h, w).cpu().numpy()
             depths.append(depth)
 
-            if savedir is not None:
-                self.save_imgs(rgb, depth, savedir, i)
+            if savepath is not None:
+                save_imgs(rgb, depth, idx, savepath)
 
         # revert the height and width after rendering
         self.volren.h = temp_h 
