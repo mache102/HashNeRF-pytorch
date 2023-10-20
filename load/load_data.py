@@ -67,7 +67,7 @@ def load_data(args):
             near = 0.
             far = 1.
         
-        cc = CameraConfig(*hwf, 
+        cc = CameraConfig(height=hwf[1], width=hwf[0], focal=hwf[2],
                           near=near, far=far)
         dataset = StandardDataset(cc=cc, images=images, poses=poses, 
                                   render_poses=render_poses,
@@ -87,7 +87,7 @@ def load_data(args):
         else:
             images = images[...,:3]
 
-        cc = CameraConfig(*hwf,
+        cc = CameraConfig(height=hwf[1], width=hwf[0], focal=hwf[2],
                             near=near, far=far)
         dataset = StandardDataset(cc=cc, images=images, poses=poses,
                                   render_poses=render_poses,
@@ -103,7 +103,7 @@ def load_data(args):
         near = 0.1
         far = 10.0
 
-        cc = CameraConfig(*hwf,
+        cc = CameraConfig(height=hwf[1], width=hwf[0], focal=hwf[2],,
                             near=near, far=far)
         dataset = StandardDataset(cc=cc, images=images, poses=poses,
                                   render_poses=render_poses,
@@ -122,7 +122,7 @@ def load_data(args):
         else:
             images = images[...,:3]
 
-        cc = CameraConfig(*hwf, k=K,
+        cc = CameraConfig(height=hwf[1], width=hwf[0], focal=hwf[2], k=K,
                             near=near, far=far)
         dataset = StandardDataset(cc=cc, images=images, poses=poses,
                                   render_poses=render_poses,
@@ -142,7 +142,7 @@ def load_data(args):
         near = hemi_R-1.
         far = hemi_R+1.
 
-        cc = CameraConfig(*hwf,
+        cc = CameraConfig(height=hwf[1], width=hwf[0], focal=hwf[2],
                             near=near, far=far)
         dataset = StandardDataset(cc=cc, images=images, poses=poses,
                                   render_poses=render_poses,

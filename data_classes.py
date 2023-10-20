@@ -10,10 +10,10 @@ from load.load_equirect import EquirectRays
 class CameraConfig:
     height: int
     width: int
-    focal: Optional[float] = None
-    k: Optional[np.ndarray] = None
     near: float
     far: float
+    focal: Optional[float] = None
+    k: Optional[np.ndarray] = None
 
     def __post_init__(self):
         if self.k is None:
