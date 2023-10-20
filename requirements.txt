@@ -8,9 +8,11 @@ cmake==3.27.5
 ConfigArgParse==1.7
 contourpy==1.1.1
 cycler==0.12.0
+einops==0.7.0
 filelock==3.12.4
 fonttools==4.43.0
 frozenlist==1.4.0
+haversine==2.8.0
 idna==3.4
 imageio==2.31.4
 imageio-ffmpeg==0.4.9
