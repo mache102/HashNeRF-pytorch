@@ -198,7 +198,7 @@ class NeRFSmall(nn.Module):
             if l != self.num_layers - 1:
                 h = F.relu(h, inplace=True)
 
-        print(h.shape)
+        # print(h.shape)
 
         sigma, geo_feat = h[..., 0], h[..., 1:]
         # feed SH (geo_Feat) to color network
