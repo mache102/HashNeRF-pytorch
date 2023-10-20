@@ -19,8 +19,10 @@ def config_parser():
                         help='random seed')
 
     # training options
-    parser.add_argument("--N_iters", type=int, default=10000,
+    parser.add_argument("--train_iters", type=int, default=200000,
                         help="number of iterations to train")
+    parser.add_argument("--train_bsz", type=int, default=32*32*4,
+                        help='batch size (number of random rays per gradient step)')
     parser.add_argument("--netdepth", type=int, default=8,
                         help='layers in network')
     parser.add_argument("--netwidth", type=int, default=256,
@@ -29,11 +31,9 @@ def config_parser():
                         help='layers in fine network')
     parser.add_argument("--netwidth_fine", type=int, default=256,
                         help='channels per layer in fine network')
-    parser.add_argument("--N_rand", type=int, default=32*32*4,
-                        help='batch size (number of random rays per gradient step)')
-    parser.add_argument("--lrate", type=float, default=5e-4,
+    parser.add_argument("--lr", type=float, default=5e-4,
                         help='learning rate')
-    parser.add_argument("--lrate_decay", type=int, default=250,
+    parser.add_argument("--lr_decay", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')
     parser.add_argument("--chunk", type=int, default=1024*32,
                         help='number of rays processed in parallel, decrease if running out of memory')
@@ -41,8 +41,8 @@ def config_parser():
                         help='number of pts sent through network in parallel, decrease if running out of memory')
     parser.add_argument("--use_batching", action='store_true',
                         help='only take random rays from 1 image at a time')
-    parser.add_argument("--no_reload", action='store_true',
-                        help='do not reload weights from saved ckpt')
+    parser.add_argument("--reload", action='store_true',
+                        help='reload weights from saved ckpt')
     parser.add_argument("--ft_path", type=str, default=None,
                         help='specific weights npy file to reload for coarse network')
 
@@ -55,10 +55,10 @@ def config_parser():
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true',
                         help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=int, default=1,
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
-    parser.add_argument("--i_embed_views", type=int, default=2,
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
+    parser.add_argument("--i_embed", type=int, default="pos",
+                        help='none: none, pos: positional encoding, hash: hash encoding, sh: spherical harmonics')
+    parser.add_argument("--i_embed_views", type=int, default="pos",
+                        help='none: none, pos: positional encoding, hash: hash encoding, sh: spherical harmonics')
     parser.add_argument("--multires", type=int, default=10,
                         help='log2 of max freq for positional encoding (3D location)')
     parser.add_argument("--multires_views", type=int, default=4,

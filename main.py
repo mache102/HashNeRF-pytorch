@@ -1,27 +1,14 @@
-import imageio
-import numpy as np
-import os
-import json
-import pdb
-import pickle
-import time
-
-from tqdm import tqdm, trange
-from typing import List, Tuple, Dict, Optional
-
+import json 
+import os 
 import torch
 
 from networks.hash_nerf import HashNeRF
 from networks.vanilla_nerf import VanillaNeRF
-
-from renderer import *
-from create_nerf import create_nerf
+from radam import RAdam
 from ray_util import *
-from loss import sigma_sparsity_loss, total_variation_loss
-from create_nerf import get_embedder
 from load.load_data import load_data
 
-from util import create_expname, all_to_tensor, shuffle_rays, to_8b, save_configs
+from util import *
 from parse_args import config_parser
 
 from trainers.equirect import EquirectTrainer 
@@ -39,12 +26,9 @@ def main():
     Experiment savepath, savename, etc.
     """
     # Create log dir and copy the config file
-    basedir = args.basedir
     args.expname = create_expname(args)
-    expname = args.expname
-    savepath = os.path.join(basedir, expname)
-    args.savepath = savepath # for convenience
-    os.makedirs(savepath, exist_ok=True)
+    args.savepath = os.path.join(args.basedir, args.expname)
+    os.makedirs(args.savepath, exist_ok=True)
     save_configs(args)
 
     """
@@ -64,15 +48,17 @@ def main():
         "dir": None
     }
     # input ch as in model input ch
-    embedders["pos"], input_ch = get_embedder(args.multires, args, i=args.i_embed)
-    if args.i_embed==1:
+    embedders["pos"], input_ch = get_embedder(name=args.i_embed, args=args, 
+                                              multires=args.multires)
+    if args.i_embed == 'hash':
         # hashed embedding table
         pos_embedder_params = list(embedders["pos"].parameters())
 
     input_ch_views = 0
     if args.use_viewdirs:
         # if using hashed for xyz, use SH for views
-        embedders["dir"], input_ch_views = get_embedder(args.multires_views, args, i=args.i_embed_views)
+        embedders["dir"], input_ch_views = get_embedder(name=args.i_embed_views,
+                                                        args=args, multires=args.multires_views)
 
     """
     Create coarse and fine models
@@ -81,7 +67,7 @@ def main():
         "coarse": None,
         "fine": None
     }
-    if args.i_embed == 1:
+    if args.i_embed == "hash":
         model_coarse = HashNeRF(model_config["coarse"], input_ch=input_ch, 
                                 input_ch_views=input_ch_views).to(device)
         
@@ -97,7 +83,7 @@ def main():
     grad_vars = list(models["coarse"].parameters())
 
     if args.N_importance > 0:
-        if args.i_embed == 1:
+        if args.i_embed == "hash":
             model_fine = HashNeRF(model_config["fine"], input_ch=input_ch, 
                                     input_ch_views=input_ch_views).to(device)
             
@@ -112,17 +98,17 @@ def main():
     """
     Create optimizer
     """
-    if args.i_embed == 1:
+    if args.i_embed == "hash":
         optimizer = \
             RAdam([
                 {'params': grad_vars, 'weight_decay': 1e-6},
                 {'params': pos_embedder_params, 'eps': 1e-15}
-            ], lr=args.lrate, betas=(0.9, 0.99))
+            ], lr=args.lr, betas=(0.9, 0.99))
     else:
         optimizer = \
             torch.optim.Adam(
                 params=grad_vars, 
-                lr=args.lrate, 
+                lr=args.lr, 
                 betas=(0.9, 0.999)
             )
 
@@ -133,10 +119,13 @@ def main():
     if args.ft_path is not None and args.ft_path!='None':
         ckpts = [args.ft_path]
     else:
-        ckpts = [os.path.join(savepath, f) for f in sorted(os.listdir(os.path.join(savepath))) if 'tar' in f]
+        ckpts = []
+        for f in sorted(os.listdir(args.savepath)):
+            if "tar" in f:
+                ckpts.append(os.path.join(args.savepath, f))
 
     print('Found ckpts', ckpts)
-    if len(ckpts) > 0 and not args.no_reload:
+    if len(ckpts) > 0 and args.reload:
         ckpt_path = ckpts[-1]
         print('Reloading from', ckpt_path)
         ckpt = torch.load(ckpt_path)
@@ -145,10 +134,10 @@ def main():
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
         # Load model
-        models["coarse"].load_state_dict(ckpt['network_fn_state_dict'])
+        models["coarse"].load_state_dict(ckpt['coarse_model_state_dict'])
         if models["fine"] is not None:
-            models["fine"].load_state_dict(ckpt['network_fine_state_dict'])
-        if args.i_embed==1:
+            models["fine"].load_state_dict(ckpt['fine_model_state_dict'])
+        if args.i_embed == "hash":
             embedders["pos"].load_state_dict(ckpt['pos_embedder_state_dict'])
 
     args.global_step = global_step
@@ -192,7 +181,7 @@ if __name__ == '__main__':
 
     parser = config_parser()
     args = parser.parse_args()
-    args.N_iters += 1
+    args.train_iters += 1
     if args.dataset_type != 'llff':
         args.ndc = False
 

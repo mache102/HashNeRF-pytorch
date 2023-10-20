@@ -11,6 +11,26 @@ class BaseTrainer(ABC):
     def __init__(self):
         pass
 
+    @abstractmethod 
+    def unpack_cc(self, cc):
+        """
+        Unpack camera configs
+
+        h: int, Height
+        w: int, Width
+        f: float, Focal
+        k: np.ndarray, Intrinsic matrix
+        near: float, Near plane
+        far: float, Far plane
+        """
+        self.cc = cc 
+        self.h = cc.h
+        self.w = cc.w
+        self.focal = cc.focal
+        self.k = cc.k
+        self.near = cc.near
+        self.far = cc.far
+
     @abstractmethod
     def fit(self):
         """

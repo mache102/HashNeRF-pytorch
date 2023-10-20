@@ -1,13 +1,11 @@
 import argparse
 import torch
 import numpy as np
-import time 
-import pickle
+
 import imageio
 
-from tqdm import trange , tqdm 
+from tqdm import trange, tqdm 
 
-from loss import total_variation_loss
 from data_classes import EquirectDataset
 from renderer import VolumetricRenderer
 from renderer_util import prepare_rays
@@ -34,55 +32,52 @@ class EquirectTrainer(BaseTrainer):
                                          args=args)
 
         self.savepath = args.savepath
-        self.bsz = args.N_rand
-        self.iters = args.N_iters + 1
-        self.use_batching = args.use_batching
+        self.train_bsz = args.train_bsz
+        self.global_step = args.global_step # curr step
 
-        self.precrop = {
-            "iters": args.precrop_iters,
-            "frac": args.precrop_frac
-        }
-
-        self.N_rand = args.N_rand
-        self.i_batch = 0
-        self.global_step = args.global_step
+        # start and end iters
         self.start = self.global_step + 1
-        self.end = args.N_iters
+        self.end = args.train_iters
+
+        # starting index of the next training batch.
+        # if this exceeds the number of training rays,
+        # then we shuffle the dataset and reset this to 0
+        self.next_batch_idx = 0 
+
+        # constant
+        self.decay_rate = 0.1
 
     def unpack_dataset(self, dataset):
-        self.rays_train = dataset.rays_train
-        self.rays_test = dataset.rays_test
-        self.rays_train = shuffle_rays(all_to_tensor(self.rays_train, device))
-        self.rays_test = all_to_tensor(self.rays_test, device)
-
+        """
+        unpack train&test rays, bbox, and camera config
+        """
+        self.rays_train = shuffle_rays(all_to_tensor(dataset.rays_train, device))
+        self.rays_test = all_to_tensor(dataset.rays_test, device)
         self.bbox = dataset.bbox
 
-        cc = dataset.cc
-        self.cc = cc 
-        self.h = cc.h
-        self.w = cc.w
-        self.focal = cc.focal
-        self.k = cc.k
-        self.near = cc.near
-        self.far = cc.far
+        self.unpack_cc(dataset.cc)
 
     def fit(self):
-        print('Begin, iter: %d' % self.start)
+        """
+        Training loop
+        """
+        print(f"Training iterations {self.start} to {self.end}")
 
         for iter in trange(self.start, self.end):
-            batch_o, batch_d, \
-                target_rgb, target_depth, target_gradient = \
-            self.get_batch(self.i_batch, self.i_batch + self.N_rand)
-            self.i_batch += self.N_rand
+            # retrieve batch of data
+            batch, targets = self.get_batch(start=self.next_batch_idx, step=self.train_bsz)
+            self.next_batch_idx += self.train_bsz
 
-            self.shuffle()
+            # shuffle 
+            if self.next_batch_idx >= self.rays_train.rgb.shape[0]:
+                print("Shuffle data after an epoch!")
+                self.rays_train = shuffle_rays(self.rays_train)
+                self.next_batch_idx = 0 # reset
+
             # optimize
-            rays, reshape_to = prepare_rays(rays=[batch_o, batch_d], ndc=self.args.ndc)
-            rgb, depth, gradient, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
-            loss, psnr, psnr_0 = self.calc_loss(rgb, target_rgb, 
-                                        depth, target_depth, 
-                                        gradient, target_gradient, 
-                                        extras)
+            rays, reshape_to = prepare_rays(rays=[batch["o"], batch["d"]], ndc=self.args.ndc)
+            preds, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
+            loss, psnr, psnr_0 = self.calc_loss(preds, targets, extras)
             self.update_lr()
             self.log_progress()
 
@@ -92,46 +87,52 @@ class EquirectTrainer(BaseTrainer):
             self.global_step += 1
 
 
-    def get_batch(self, start, end):   
-        batch_o = self.rays_train.o[start:end]
-        batch_d = self.rays_train.d[start:end]
+    def get_batch(self, start, step):
+        end = start + step   
+        batch = {
+            "o": self.rays_train.o[start:end],
+            "d": self.rays_train.d[start:end]
+        }
 
-        target_rgb = self.rays_train.rgb[start:end]
-        target_depth = self.rays_train.d[start:end]
-        target_gradient = self.rays_train.g[start:end]
-        return batch_o, batch_d, target_rgb, target_depth, target_gradient
+        target = {
+            "rgb_map": self.rays_train.rgb[start:end],
+            "depth_map": self.rays_train.depth[start:end],
+            "accumulation_map": self.rays_train.gradient[start:end]
+        }
+        return batch, target
 
-    def shuffle(self):
-        if self.i_batch >= self.rays_train.rgb.shape[0]:
-            print("Shuffle data after an epoch!")
-            self.rays_train = shuffle_rays(self.rays_train)
-            self.i_batch = 0
+    def calc_loss(self, preds, targets, extras):
+        
+        # unpack
+        rgb = preds["rgb_map"]
+        depth = preds["depth_map"]
+        gradient = preds["accumulation_map"]
 
-    def calc_loss(self, rgb, target_rgb, 
-                  depth, target_depth,
-                  gradient, target_gradient,
-                   extras):
+        t_rgb = targets["rgb_map"]
+        t_depth = targets["depth_map"]
+        t_gradient = targets["accumulation_map"]
 
-        rgb_loss = img2mse(rgb, target_rgb)
+        # final psnr
+        rgb_loss = img2mse(rgb, t_rgb)
         loss = rgb_loss
         # depth_loss
         if self.args.use_depth:
-            loss += torch.abs(depth - target_depth).mean()
+            loss += torch.abs(depth - t_depth).mean()
             
         if self.args.use_gradient:
-            loss += img2mse(gradient, target_gradient)
-
+            loss += img2mse(gradient, t_gradient)
         psnr = mse2psnr(rgb_loss)
         
+        # coarse psnr (if coarse is not final)
         psnr_0 = None
         if 'rgb_0' in extras:
-            rgb_loss_0 = img2mse(extras['rgb_0'], target_rgb)
+            rgb_loss_0 = img2mse(extras['rgb_0'], t_rgb)
             loss += rgb_loss_0
             if self.args.use_depth:
-                loss += torch.abs(extras['depth_0'] - target_depth).mean()
+                loss += torch.abs(extras['depth_0'] - t_depth).mean()
 
             if self.args.use_gradient:
-                loss += img2mse(extras['grad_0'], target_gradient)
+                loss += img2mse(extras['grad_0'], t_gradient)
 
             psnr_0 = mse2psnr(rgb_loss_0)
 
@@ -141,11 +142,10 @@ class EquirectTrainer(BaseTrainer):
         return loss, psnr, psnr_0
 
     def update_lr(self):
-        decay_rate = 0.1
-        decay_steps = self.args.lrate_decay * 1000
-        new_lrate = self.args.lrate * (decay_rate ** (self.global_step / decay_steps))
+        decay_steps = self.args.lr_decay * 1000
+        new_lr = self.args.lr * (self.decay_rate ** (self.global_step / decay_steps))
         for param_group in self.optimizer.param_groups:
-            param_group['lr'] = new_lrate
+            param_group['lr'] = new_lr
 
     def log_progress(self, iter):
         """
@@ -153,7 +153,7 @@ class EquirectTrainer(BaseTrainer):
         """
         if iter % self.args.i_weights == 0:
             path = os.path.join(self.savepath, '{:06d}.tar'.format(iter))
-            if self.args.i_embed == 1:
+            if self.args.i_embed == "hash":
                 torch.save({
                     'global_step': self.global_step,
                     'coarse_model_state_dict': self.models["coarse"].state_dict(),

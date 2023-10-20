@@ -35,8 +35,8 @@ class StandardTrainer(BaseTrainer):
                                          args=args)
 
         self.savepath = args.savepath
-        self.bsz = args.N_rand
-        self.iters = args.N_iters + 1
+        self.bsz = args.train_bsz
+        self.iters = args.train_iters + 1
         self.use_batching = args.use_batching
 
         self.precrop = {
@@ -86,15 +86,7 @@ class StandardTrainer(BaseTrainer):
             self.render_poses = np.array(self.poses[self.i_test])
         self.render_poses = torch.Tensor(self.render_poses).to(device)
     
-
-        cc = dataset.cc
-        self.cc = cc
-        self.h = cc.height
-        self.w = cc.width
-        self.focal = cc.focal
-        self.k = cc.k
-        self.near = cc.near
-        self.far = cc.far
+        self.unpack_cc(dataset.cc)
 
     def fit(self):
         for iter in trange(self.start, self.iters):
@@ -113,10 +105,10 @@ class StandardTrainer(BaseTrainer):
             loss, psnr = self.calc_loss(iter, rgb, target_s, extras)
             # update lr
             decay_rate = 0.1
-            decay_steps = self.args.lrate_decay * 1000
-            new_lrate = self.args.lrate * (decay_rate ** (self.global_step / decay_steps))
+            decay_steps = self.args.lr_decay * 1000
+            new_lr = self.args.lr * (decay_rate ** (self.global_step / decay_steps))
             for param_group in self.optimizer.param_groups:
-                param_group['lr'] = new_lrate
+                param_group['lr'] = new_lr
             t = time.time() - t1
 
             self.log_progress(iter, t, loss, psnr)
@@ -192,7 +184,7 @@ class StandardTrainer(BaseTrainer):
         loss += sparsity_loss
 
         # add Total Variation loss
-        if self.args.i_embed == 1:
+        if self.args.i_embed == "hash":
             em = self.embedders["pos"]
             TV_loss = sum(total_variation_loss(em, i) for i in range(em.n_levels))
             loss += self.args.tv_loss_weight * TV_loss
@@ -210,7 +202,7 @@ class StandardTrainer(BaseTrainer):
         """
         if iter % self.args.i_weights == 0:
             path = os.path.join(self.savepath, '{:06d}.tar'.format(iter))
-            if self.args.i_embed == 1:
+            if self.args.i_embed == "hash":
                 torch.save({
                     'global_step': self.global_step,
                     'coarse_model_state_dict': self.models["coarse"].state_dict(),

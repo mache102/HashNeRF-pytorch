@@ -1,8 +1,16 @@
-import torch 
 import numpy as np
 import os
 import imageio 
 import matplotlib.pyplot as plt
+
+import torch
+import torch.nn as nn
+
+from embedding.embedder import Embedder
+from embedding.hash_encoding import HashEmbedder 
+from embedding.spherical_harmonic import SHEncoder
+
+# TODO: reorganize utils
 
 def get_transform_matrix(translation, rotation):
     """
@@ -62,16 +70,11 @@ def create_meshgrid_np(H, W, normalized_coordinates=True):
 
 
 def create_expname(args):
-    if args.i_embed==1:
-        args.expname += "_hashXYZ"
-    elif args.i_embed==0:
-        args.expname += "_posXYZ"
-    if args.i_embed_views==2:
-        args.expname += "_sphereVIEW"
-    elif args.i_embed_views==0:
-        args.expname += "_posVIEW"
+    args.expname += f"_{args.i_embed}XYZ"
+    args.expname += f"_{args.i_embed_views}VIEW"
+    
     args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
-    args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
+    args.expname += "_lr"+str(args.lr) + "_decay"+str(args.lr_decay)
     args.expname += "_RAdam"
     if args.sparse_loss_weight > 0:
         args.expname += "_sparse" + str(args.sparse_loss_weight)
@@ -175,3 +178,37 @@ def save_imgs(rgb, depth, idx, savepath,
         plt.close(fig)
     else:
         raise NotImplementedError
+    
+def get_embedder(name, args, multires=None):
+    """
+    none: no embedding
+    pos: Standard positional encoding (Nerf, section 5.1)
+    hash: Hashed pos encoding
+    sh: Spherical harmonic encoding
+    """
+    if name == "none":
+        return nn.Identity(), 3
+    elif name == "positional":
+        assert multires is not None
+        embed_kwargs = {
+                    'include_input' : True,
+                    'input_dims' : 3,
+                    'max_freq_log2' : multires - 1,
+                    'num_freqs' : multires, 
+                    'log_sampling' : True,
+                    'periodic_fns' : [torch.sin, torch.cos],
+        }
+        
+        embedder_obj = Embedder(**embed_kwargs)
+        embed = lambda x, eo=embedder_obj : eo.embed(x)
+        out_dim = embedder_obj.out_dim
+    elif name == "hash":
+        embed = HashEmbedder(bounding_box=args.bounding_box, \
+                            log2_hashmap_size=args.log2_hashmap_size, \
+                            finest_resolution=args.finest_res)
+        out_dim = embed.out_dim
+    elif name == "sh":
+        embed = SHEncoder()
+        out_dim = embed.out_dim
+
+    return embed, out_dim

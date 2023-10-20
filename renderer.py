@@ -144,7 +144,7 @@ class VolumetricRenderer:
 
         priority = ['rgb_map', 'depth_map', 'accumulation_map']
 
-        ret_main = [outputs[k] for k in priority]
+        ret_main = {k: outputs[k] for k in priority}
         ret_extra = {k: outputs[k] for k in outputs if k not in priority}
         return ret_main + ret_extra
 

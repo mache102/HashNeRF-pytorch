@@ -4,7 +4,7 @@ basedir = ./logs
 datadir = ./data/gmap_rail1
 dataset_type = equirect
 
-N_rand = 1400
+train_bsz = 1400
 N_samples = 64
 N_importance = 128
 
