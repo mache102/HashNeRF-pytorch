@@ -14,6 +14,17 @@ from torch.distributions import Categorical
 
 from ray_util import get_rays, get_ndc_rays
 
+from dataclasses import dataclass
+
+@dataclass 
+class RayPredictions:
+    rgb: torch.Tensor
+    depth: torch.Tensor
+    disparity: torch.Tensor
+    accumulation: torch.Tensor
+    weights: torch.Tensor
+    sparsity_loss: torch.Tensor
+
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
@@ -71,7 +82,7 @@ def render_path(render_poses, hwf, render_kwargs, args, K=None, chunk=None, gt_i
 
     (most operations take place in render() and its called funcs)
     """
-    if dataset_type == "st3d":
+    if dataset_type == "equirect":
         rays_o, rays_d = render_poses
         t = time.time()
         batch = H*W
@@ -239,7 +250,7 @@ def render(H, W, focal=None, K=None, chunk=1024*32, rays=None, c2w=None, ndc=Tru
     ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
     return ret_list + [ret_dict]
 
-def render_rays(ray_batch,
+def render_rays(rays,
                 network_fn,
                 network_query_fn,
                 N_samples,
@@ -255,7 +266,7 @@ def render_rays(ray_batch,
                 pytest=False):
     """Volumetric rendering.
     Args:
-      ray_batch: array of shape [batch_size, ...]. All information necessary
+      rays: array of shape [batch_size, ...]. All information necessary
         for sampling along a ray, including: ray origin, ray direction, min
         dist, max dist, and unit-magnitude viewing direction.
       network_fn: function. Model for predicting RGB and density at each point
@@ -293,75 +304,84 @@ def render_rays(ray_batch,
     6:8 - near and far bounds
     8:11 (if use_viewdirs) - viewing direction
     """
-    N_rays = ray_batch.shape[0]
-    rays_o, rays_d = ray_batch[:,0:3], ray_batch[:,3:6] # [N_rays, 3] each
-    viewdirs = ray_batch[:,-3:] if ray_batch.shape[-1] > 8 else None
-    bounds = torch.reshape(ray_batch[...,6:8], [-1,1,2]) # (chunk_size, 1, 2)
-    near, far = bounds[...,0], bounds[...,1] # [-1,1]
+    # unpack batch of rays
+    N_rays = rays.shape[0]
+    rays_o, rays_d = rays[:,0:3], rays[:,3:6]
+    viewdirs = rays[:,-3:] if rays.shape[-1] > 8 else None
+    bounds = torch.reshape(rays[...,6:8], [-1,1,2]) # [N_rays, 1, 2]
+    near, far = bounds[...,0], bounds[...,1] # [N_rays, 1]
 
+    # prepare for sampling
     t_vals = torch.linspace(0., 1., steps=N_samples)
     if not lindisp:
-        # z_vals = torch.linspace(near, far, steps=N_samples)
-        # same thing as the following line
-        z_vals = near * (1.-t_vals) + far * (t_vals)
+        z_vals = near * (1. - t_vals) + far * (t_vals)
     else:
-        z_vals = 1./(1./near * (1.-t_vals) + 1./far * (t_vals))
+        z_vals = 1. / (1. / near * (1. - t_vals) + 1. / far * (t_vals))
 
-    # z_vals is now of shape (N_rays, N_samples)
     z_vals = z_vals.expand([N_rays, N_samples])
 
     if perturb > 0.:
         # get intervals between samples
-        mids = .5 * (z_vals[...,1:] + z_vals[...,:-1])
-        upper = torch.cat([mids, z_vals[...,-1:]], -1)
-        lower = torch.cat([z_vals[...,:1], mids], -1)
+        mids = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
+        upper = torch.cat([mids, z_vals[..., -1:]], -1)
+        lower = torch.cat([z_vals[..., :1], mids], -1)
         # stratified samples in those intervals
         t_rand = torch.rand(z_vals.shape)
 
-        # Pytest, overwrite u with numpy's fixed random numbers
-        if pytest:
-            np.random.seed(0)
-            t_rand = np.random.rand(*list(z_vals.shape))
-            t_rand = torch.Tensor(t_rand)
-
         z_vals = lower + (upper - lower) * t_rand
 
-    pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
-
+    # concatenate positional samples
+    # [N_rays, N_samples, 3]
+    pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
+    # raw = run_network(inputs={"pos": positional, "dir": viewdirs},
+    #                         model_name="coarse")
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    coarse_preds = raw2outputs(raw, z_vals, rays_d, 
+                                    raw_noise_std=raw_noise_std)
+    weights = coarse_preds.weights
 
     if N_importance > 0:
-
-        rgb_map_0, depth_map_0, acc_map_0, sparsity_loss_0 = rgb_map, depth_map, acc_map, sparsity_loss
-
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
-        z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
+        z_samples = sample_pdf(z_vals_mid, weights[...,1:-1],  N_samples,
+                            det=(perturb==0.))
         z_samples = z_samples.detach()
 
         z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
-        pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
 
-        run_fn = network_fn if network_fine is None else network_fine
-#         raw = run_network(pts, fn=run_fn)
-        raw = network_query_fn(pts, viewdirs, run_fn)
+        # concatenate positional samples
+        # [N_rays, N_samples + N_importance, 3]
+        pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
+        # model_name = "fine" if models["fine"] is not None else "coarse"
+        # raw = run_network(inputs={"pos": positional, "dir": viewdirs},
+        #                         model_name=model_name)
+        raw = network_query_fn(pts, viewdirs, network_fine)
+        fine_preds = raw2outputs(raw, z_vals, rays_d, 
+                                        raw_noise_std=raw_noise_std)
 
-        rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    if N_importance > 0:
+        ret = {
+            "rgb0": coarse_preds.rgb,
+            "depth0": coarse_preds.depth,
+            "acc0": coarse_preds.accumulation,
+            "sparsity_loss0": coarse_preds.sparsity_loss,     
 
-    ret = {'rgb_map' : rgb_map, 'depth_map' : depth_map, 'acc_map' : acc_map, 'sparsity_loss': sparsity_loss}
+            "rgb_map": fine_preds.rgb,
+            "depth_map": fine_preds.depth,
+            "acc_map": fine_preds.accumulation,
+            "sparsity_loss": fine_preds.sparsity_loss,
+            "z_std": torch.std(z_samples, dim=-1, unbiased=False) # (N_rays,)
+        }
+    else: 
+        ret = {
+            "rgb_map": coarse_preds.rgb,
+            "depth_map": coarse_preds.depth,
+            "accumulation_map": coarse_preds.accumulation,
+            "sparsity_loss": coarse_preds.sparsity_loss,
+        }
     if retraw:
         ret['raw'] = raw
-    if N_importance > 0:
-        ret['rgb0'] = rgb_map_0
-        ret['depth0'] = depth_map_0
-        ret['acc0'] = acc_map_0
-        ret['sparsity_loss0'] = sparsity_loss_0
-        ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
 
-    for k in ret:
-        if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
-            print(f"! [Numerical Error] {k} contains nan or inf.")
-
+    # debug_dict(ret)
     return ret
 
 def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, net_chunk=1024*64):
@@ -452,6 +472,12 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     except:
         pdb.set_trace()
     sparsity_loss = entropy
+
+
+    return RayPredictions(rgb=rgb_map, depth=depth_map, disparity=disp_map,
+                        accumulation=acc_map, weights=weights,
+                        sparsity_loss=sparsity_loss)
+
 
     return rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss
 

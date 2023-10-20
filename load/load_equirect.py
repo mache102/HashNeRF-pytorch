@@ -27,7 +27,7 @@ def concat_all(batch):
 
     return batch
 
-def load_st3d_data(baseDir: str, stage=0):
+def load_equirect_data(baseDir: str, stage=0):
 
     basename = baseDir.split('/')[-1]+'_'
     rgb = np.asarray(Image.open(os.path.join(baseDir, basename+'rgb.png'))) / 255.0

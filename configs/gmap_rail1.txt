@@ -2,7 +2,7 @@
 expname = gmap_rail1
 basedir = ./logs
 datadir = ./data/gmap_rail1
-dataset_type = st3d
+dataset_type = equirect
 
 N_rand = 1400
 N_samples = 64

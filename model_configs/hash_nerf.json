@@ -1,0 +1,24 @@
+{
+    "coarse": {
+        "sigma": {
+            "layers": 2,
+            "hdim": 64,
+            "geo_feat_dim": 15
+        },
+        "color": {
+            "layers": 3,
+            "hdim": 64
+        }
+    },
+    "fine": {
+        "sigma": {
+            "layers": 2,
+            "hdim": 64,
+            "geo_feat_dim": 15
+        },
+        "color": {
+            "layers": 3,
+            "hdim": 64
+        }
+    }
+}

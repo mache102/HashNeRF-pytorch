@@ -24,7 +24,10 @@ from load.load_deepvoxels import load_dv_data
 from load.load_blender import load_blender_data
 from load.load_scannet import load_scannet_data
 from load.load_LINEMOD import load_LINEMOD_data
-from load.load_st3d import load_st3d_data
+from load.load_equirect import load_equirect_data
+from load.load_data import load_data
+
+from renderer import *
 
 from util import create_expname, all_to_tensor, shuffle_rays
 
@@ -105,7 +108,7 @@ def config_parser():
 
     # dataset options
     parser.add_argument("--dataset_type", type=str, default='llff',
-                        help='options: llff / blender / deepvoxels / st3d / multi_mp3d')
+                        help='options: llff / blender / deepvoxels / equirect / multi_mp3d')
     parser.add_argument("--testskip", type=int, default=8,
                         help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
 
@@ -135,10 +138,10 @@ def config_parser():
     parser.add_argument("--llffhold", type=int, default=8,
                         help='will take every 1/N images as LLFF test set, paper uses 8')
 
-    ## st3d flags
+    ## equirect flags
     # use_depth:
     # use_gradient:
-    # stage: used only in load_st3d_data
+    # stage: used only in load_equirect_data
     parser.add_argument("--use_depth", action='store_true', 
                         help='use depth to update')
     parser.add_argument("--use_gradient", action='store_true', 
@@ -208,126 +211,132 @@ def main():
     bounding_box (2, 3) # pair of 3d coords
 
     """
-    K = None
-    # Load data
-    if args.dataset_type == 'st3d':
-        rays, rays_test, H, W = load_st3d_data(args.datadir, args.stage)
-        # rays_o, rays_d, rays_g, rays_rgb, rays_depth, hw = load_st3d_data(args.datadir, args.stage)
-        # rays_o, rays_o_test = rays_o
-        # rays_d, rays_d_test = rays_d
-        # rays_rgb, rays_rgb_test = rays_rgb
-        # rays_depth, rays_depth_test = rays_depth
-        near, far = 0.0, 2.0
-        print(f"Near Far bounds are: {near}, {far}")
-        args.bounding_box = (torch.tensor([-1.5, -1.5, -1.0]), torch.tensor([1.5, 1.5, 1.0]))
+    dataset = load_data(args)
+
+
+    # K = None
+    # # Load data
+    # if args.dataset_type == 'equirect':
+    #     rays, rays_test, H, W = load_equirect_data(args.datadir, args.stage)
+    #     # rays_o, rays_d, rays_g, rays_rgb, rays_depth, hw = load_equirect_data(args.datadir, args.stage)
+    #     # rays_o, rays_o_test = rays_o
+    #     # rays_d, rays_d_test = rays_d
+    #     # rays_rgb, rays_rgb_test = rays_rgb
+    #     # rays_depth, rays_depth_test = rays_depth
+    #     near, far = 0.0, 2.0
+    #     print(f"Near Far bounds are: {near}, {far}")
+    #     args.bounding_box = (torch.tensor([-1.5, -1.5, -1.0]), torch.tensor([1.5, 1.5, 1.0]))
         
-    elif args.dataset_type == 'llff':
-        images, poses, bds, render_poses, i_test, bounding_box = load_llff_data(args.datadir, args.factor,
-                                                                  recenter=True, bd_factor=.75,
-                                                                  spherify=args.spherify)
-        hwf = poses[0,:3,-1]
-        poses = poses[:,:3,:4]
-        args.bounding_box = bounding_box
-        print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
+    # elif args.dataset_type == 'llff':
+    #     images, poses, bds, render_poses, i_test, bounding_box = load_llff_data(args.datadir, args.factor,
+    #                                                               recenter=True, bd_factor=.75,
+    #                                                               spherify=args.spherify)
+    #     hwf = poses[0,:3,-1]
+    #     poses = poses[:,:3,:4]
+    #     args.bounding_box = bounding_box
+    #     print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
 
-        if not isinstance(i_test, list):
-            i_test = [i_test]
+    #     if not isinstance(i_test, list):
+    #         i_test = [i_test]
 
-        if args.llffhold > 0:
-            print('Auto LLFF holdout,', args.llffhold)
-            i_test = np.arange(images.shape[0])[::args.llffhold]
+    #     if args.llffhold > 0:
+    #         print('Auto LLFF holdout,', args.llffhold)
+    #         i_test = np.arange(images.shape[0])[::args.llffhold]
 
-        i_val = i_test
-        i_train = np.array([i for i in np.arange(int(images.shape[0])) if
-                        (i not in i_test and i not in i_val)])
+    #     i_val = i_test
+    #     i_train = np.array([i for i in np.arange(int(images.shape[0])) if
+    #                     (i not in i_test and i not in i_val)])
 
-        print('DEFINING BOUNDS')
-        if args.no_ndc:
-            near = np.ndarray.min(bds) * .9
-            far = np.ndarray.max(bds) * 1.
+    #     print('DEFINING BOUNDS')
+    #     if args.no_ndc:
+    #         near = np.ndarray.min(bds) * .9
+    #         far = np.ndarray.max(bds) * 1.
 
-        else:
-            near = 0.
-            far = 1.
-        print('NEAR FAR', near, far)
+    #     else:
+    #         near = 0.
+    #         far = 1.
+    #     print('NEAR FAR', near, far)
 
-    elif args.dataset_type == 'blender':
-        images, poses, render_poses, hwf, i_split, bounding_box = load_blender_data(args.datadir, args.half_res, args.testskip)
-        args.bounding_box = bounding_box
-        print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
-        i_train, i_val, i_test = i_split
+    # elif args.dataset_type == 'blender':
+    #     images, poses, render_poses, hwf, i_split, bounding_box = load_blender_data(args.datadir, args.half_res, args.testskip)
+    #     args.bounding_box = bounding_box
+    #     print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
+    #     i_train, i_val, i_test = i_split
 
-        near = 2.
-        far = 6.
+    #     near = 2.
+    #     far = 6.
 
-        if args.white_bkgd:
-            images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
-        else:
-            images = images[...,:3]
+    #     if args.white_bkgd:
+    #         images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
+    #     else:
+    #         images = images[...,:3]
 
-    elif args.dataset_type == 'scannet':
-        images, poses, render_poses, hwf, i_split, bounding_box = load_scannet_data(args.datadir, args.scannet_sceneID, args.half_res)
-        args.bounding_box = bounding_box
-        print('Loaded scannet', images.shape, render_poses.shape, hwf, args.datadir)
-        i_train, i_val, i_test = i_split
+    # elif args.dataset_type == 'scannet':
+    #     images, poses, render_poses, hwf, i_split, bounding_box = load_scannet_data(args.datadir, args.scannet_sceneID, args.half_res)
+    #     args.bounding_box = bounding_box
+    #     print('Loaded scannet', images.shape, render_poses.shape, hwf, args.datadir)
+    #     i_train, i_val, i_test = i_split
 
-        near = 0.1
-        far = 10.0
+    #     near = 0.1
+    #     far = 10.0
 
-    elif args.dataset_type == 'LINEMOD':
-        images, poses, render_poses, hwf, K, i_split, near, far = load_LINEMOD_data(args.datadir, args.half_res, args.testskip)
-        print(f'Loaded LINEMOD, images shape: {images.shape}, hwf: {hwf}, K: {K}')
-        print(f'[CHECK HERE] near: {near}, far: {far}.')
-        i_train, i_val, i_test = i_split
+    # elif args.dataset_type == 'LINEMOD':
+    #     images, poses, render_poses, hwf, K, i_split, near, far = load_LINEMOD_data(args.datadir, args.half_res, args.testskip)
+    #     print(f'Loaded LINEMOD, images shape: {images.shape}, hwf: {hwf}, K: {K}')
+    #     print(f'[CHECK HERE] near: {near}, far: {far}.')
+    #     i_train, i_val, i_test = i_split
 
-        if args.white_bkgd:
-            images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
-        else:
-            images = images[...,:3]
+    #     if args.white_bkgd:
+    #         images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
+    #     else:
+    #         images = images[...,:3]
 
-    elif args.dataset_type == 'deepvoxels':
+    # elif args.dataset_type == 'deepvoxels':
 
-        images, poses, render_poses, hwf, i_split = load_dv_data(scene=args.shape,
-                                                                 basedir=args.datadir,
-                                                                 testskip=args.testskip)
+    #     images, poses, render_poses, hwf, i_split = load_dv_data(scene=args.shape,
+    #                                                              basedir=args.datadir,
+    #                                                              testskip=args.testskip)
 
-        print('Loaded deepvoxels', images.shape, render_poses.shape, hwf, args.datadir)
-        i_train, i_val, i_test = i_split
+    #     print('Loaded deepvoxels', images.shape, render_poses.shape, hwf, args.datadir)
+    #     i_train, i_val, i_test = i_split
 
-        hemi_R = np.mean(np.linalg.norm(poses[:,:3,-1], axis=-1))
-        near = hemi_R-1.
-        far = hemi_R+1.
+    #     hemi_R = np.mean(np.linalg.norm(poses[:,:3,-1], axis=-1))
+    #     near = hemi_R-1.
+    #     far = hemi_R+1.
 
-    else:
-        print('Unknown dataset type', args.dataset_type, 'exiting')
-        return
+    # else:
+    #     print('Unknown dataset type', args.dataset_type, 'exiting')
+    #     return
     
     """ 
     Process HWF
     (and convert poses into np array)
     that's about it
 
-    st3d has rays batch (origin,direction,rgb,depth,gradient)
+    equirect has rays batch (origin,direction,rgb,depth,gradient)
     directly 
     whereas other datasets have images and poses
     (rays to be obtained from poses)
     """
-    if args.dataset_type != 'st3d':
-        # Cast intrinsics to right types
-        H, W, focal = hwf
-        H, W = int(H), int(W)
-        hwf = [H, W, focal]
+    # if args.dataset_type != 'equirect':
+    #     # Cast intrinsics to right types
+    #     H, W, focal = hwf
+    #     H, W = int(H), int(W)
+    #     hwf = [H, W, focal]
 
-        if K is None:
-            K = np.array([
-                [focal, 0, 0.5*W],
-                [0, focal, 0.5*H],
-                [0, 0, 1]
-            ])
+    #     if K is None:
+    #         K = np.array([
+    #             [focal, 0, 0.5*W],
+    #             [0, focal, 0.5*H],
+    #             [0, 0, 1]
+    #         ])
 
-        if args.render_test:
-            render_poses = np.array(poses[i_test])
+    #     if args.render_test:
+    #         render_poses = np.array(poses[i_test])
     
+    cc = dataset.cc
+    # from load.load_equirect import CameraConfig 
+    # cc = CameraConfig(height=H, width=W, near=near, far=far)
     """
     Experiment saving
     """
@@ -353,32 +362,139 @@ def main():
 
     set render kwargs
     """
-    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
+    args.bounding_box = dataset.bbox
+    # render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
+    # models, embedders, start, grad_vars, optimizer = create_nerf(args)
+    """
+    3. Load model config
+    """
+    args.model_config = "hash_nerf"
+    import json 
+    from create_nerf import get_embedder 
+    from networks.hash_nerf import HashNeRF
+    fp = os.path.join("model_configs", f"{args.model_config}.json")
+    if not os.path.isfile(fp):
+        raise ValueError(f"Model configuration not found: {fp}")
+    with open(fp, "r") as f:
+        model_config = json.load(f)
+        print(f"Loaded model config {args.model_config}")
+
+    """
+    4. Create embedding functions for position & viewdirs
+    """
+    args.i_embed = "hash"
+    args.i_embed_views = "sh"
+    embedders = {
+        "pos": None,
+        "dir": None
+    }
+    # input ch as in model input ch
+    embedders["pos"], input_ch = get_embedder(name=args.i_embed, args=args, 
+                                              multires=args.multires,
+                                              bbox=dataset.bbox)
+    print(f"XYZ embedder: {args.i_embed}")
+    if args.i_embed == 'hash':
+        # hashed embedding table
+        pos_embedder_params = list(embedders["pos"].parameters())
+
+    input_ch_views = 0
+    if args.use_viewdirs:
+        # if using hashed for xyz, use SH for views
+        print(f"viewdirs embedder: {args.i_embed_views}")
+        embedders["dir"], input_ch_views = get_embedder(name=args.i_embed_views,
+                                                        args=args, multires=args.multires_views,
+                                                        bbox=dataset.bbox)
+
+    """
+    5. Create coarse and fine models
+    """
+    models = {
+        "coarse": None,
+        "fine": None
+    }
+    if args.i_embed == "hash":
+        print("Coarse model: HashNeRF")
+        model_coarse = HashNeRF(model_config["coarse"], input_ch=input_ch, 
+                                input_ch_views=input_ch_views).to(device)
+        
+    elif not args.use_gradient:
+        print("Coarse model: VanillaNeRF")
+        if args.N_importance > 0:
+            model_config["coarse"]["output_ch"] += 1
+            model_config["fine"]["output_ch"] += 1
+        model_coarse = VanillaNeRF(model_config["coarse"], input_ch=input_ch, 
+                                   input_ch_views=input_ch_views, 
+                                   use_viewdirs=args.use_viewdirs,
+                                   use_gradient=args.use_gradient).to(device)
+    models["coarse"] = model_coarse
+    grad_vars = list(models["coarse"].parameters())
+
+    if args.N_importance > 0:
+        if args.i_embed == "hash":
+            print("Fine model: HashNeRF")
+            model_fine = HashNeRF(model_config["fine"], input_ch=input_ch, 
+                                    input_ch_views=input_ch_views).to(device)
+            
+        elif not args.use_gradient:
+            print("Fine model: VanillaNeRF")
+            model_fine = VanillaNeRF(model_config["fine"], input_ch=input_ch, 
+                                    input_ch_views=input_ch_views, 
+                                    use_viewdirs=args.use_viewdirs,
+                                    use_gradient=args.use_gradient).to(device)
+        models["fine"] = model_fine
+        grad_vars += list(models["fine"].parameters())
+
+    """
+    6. Create optimizer
+    """
+    if args.i_embed == "hash":
+        print("Optimizer: RAdam")
+        optimizer = \
+            RAdam([
+                {'params': grad_vars, 'weight_decay': 1e-6},
+                {'params': pos_embedder_params, 'eps': 1e-15}
+            ], lr=args.lrate, betas=(0.9, 0.99))
+    else:
+        print("Optimizer: Adam")
+        optimizer = \
+            torch.optim.Adam(
+                params=grad_vars, 
+                lr=args.lrate, 
+                betas=(0.9, 0.999)
+            )
+
+    start = 0
     global_step = start
 
-    bds_dict = {
-        'near' : near,
-        'far' : far,
-    }
-    render_kwargs_train.update(bds_dict)
-    render_kwargs_test.update(bds_dict)
+    # bds_dict = {
+    #     'near' : near,
+    #     'far' : far,
+    # }
+    # render_kwargs_train.update(bds_dict)
+    # render_kwargs_test.update(bds_dict)
+    rays_train = dataset.rays_train
+    rays_test = dataset.rays_test
 
-    if args.dataset_type != 'st3d':
+    if args.dataset_type != 'equirect':
         # Move testing data to GPU
         render_poses = torch.Tensor(render_poses).to(device)
     else:
         # all to tensor
-        rays = shuffle_rays(all_to_tensor(rays, device))
+        rays_train = shuffle_rays(all_to_tensor(rays_train, device))
         rays_test = all_to_tensor(rays_test, device)
+
     """
     Skip to render only
     """
     # Short circuit if only rendering out from trained model
-    
+    volren = VolumetricRenderer(cc=cc, models=models,
+                                         embedders=embedders,
+                                         args=args)
+
     if args.render_only:
         print('RENDER ONLY')
         with torch.no_grad():
-            if args.dataset_type == 'st3d':
+            if args.dataset_type == 'equirect':
                 if args.stage > 0:
                     testsavedir = os.path.join(savepath, 'renderonly_stage_{}_{:06d}'.format(args.stage, start))
                 else:
@@ -409,7 +525,7 @@ def main():
     """
     Prepare raybatch tensor if batching random rays
     """
-    if args.dataset_type == 'st3d':
+    if args.dataset_type == 'equirect':
         # Prepare raybatch tensor if batching random rays
         N_rand = args.N_rand
         i_batch = 0
@@ -419,56 +535,107 @@ def main():
 
         for i in trange(start, N_iters):
             time0 = time.time()
+ 
+            batch = {
+                "o": rays_train.o[i_batch:i_batch+N_rand],
+                "d": rays_train.d[i_batch:i_batch+N_rand]
+            }
+
+            targets = {
+                "rgb_map": rays_train.rgb[i_batch:i_batch+N_rand],
+                "depth_map": rays_train.d[i_batch:i_batch+N_rand], # d not depth?
+                "accumulation_map": rays_train.g[i_batch:i_batch+N_rand]
+            }
             
-            batch_o = rays.o[i_batch:i_batch+N_rand]
-            batch_d = rays.d[i_batch:i_batch+N_rand]
+            # batch_o = rays_train.o[i_batch:i_batch+N_rand]
+            # batch_d = rays_train.d[i_batch:i_batch+N_rand]
             
-            target_rgb = rays.rgb[i_batch:i_batch+N_rand]      
-            target_d = rays.d[i_batch:i_batch+N_rand]
-            target_g = rays.g[i_batch:i_batch+N_rand]
+            # target_rgb = rays_train.rgb[i_batch:i_batch+N_rand]      
+            # target_d = rays_train.d[i_batch:i_batch+N_rand]
+            # target_g = rays_train.g[i_batch:i_batch+N_rand]
 
             i_batch += N_rand
-            if i_batch >= rays.rgb.shape[0]:
+            if i_batch >= rays_train.rgb.shape[0]:
                 print("Shuffle data after an epoch!")
-                rays = shuffle_rays(rays)
+                rays_train = shuffle_rays(rays_train)
                 i_batch = 0
 
             #####  Core optimization loop  #####
 
-            rgb, dep, grad, extras = render(H, W, rays=[batch_o, batch_d], **render_kwargs_train, ndc=False)
+            rays, reshape_to = prepare_rays(cc, rays=[batch["o"], batch["d"]], 
+                                            ndc=False, use_viewdirs=args.use_viewdirs)
+            preds, extras = volren.render(rays=rays, reshape_to=reshape_to)
+            # rgb, dep, grad = preds['rgb_map'], preds['depth_map'], preds['accumulation_map']
+            # rgb, dep, grad, extras = render(H, W, rays=[batch_o, batch_d], **render_kwargs_train, ndc=False)
+            # unpack
+            rgb = preds["rgb_map"]
+            depth = preds["depth_map"]
+            gradient = preds["accumulation_map"]
 
+            t_rgb = targets["rgb_map"]
+            t_depth = targets["depth_map"]
+            t_gradient = targets["accumulation_map"]
+
+            # final psnr
+            # print(rgb.shape, t_rgb.shape)
             optimizer.zero_grad()
-            # import pdb; pdb.set_trace()
-            img_loss = img2mse(rgb, target_rgb)
+            rgb_loss = img2mse(rgb, t_rgb)
+            psnr = mse2psnr(rgb_loss)
+            loss = rgb_loss
             # depth_loss
             if args.use_depth:
-                depth_loss = torch.abs(dep - target_d).mean()
-            else:
-                depth_loss = torch.tensor(0.0)
+                loss += torch.abs(depth - t_depth).mean()
                 
             if args.use_gradient:
-                grad_loss = img2mse(grad, target_g)
-            else:
-                grad_loss = torch.tensor(0.0)
-
-
-            loss = img_loss + depth_loss + grad_loss
-            psnr = mse2psnr(img_loss)
-
-            if 'rgb0' in extras:
-                img_loss0 = img2mse(extras['rgb0'], target_rgb)
-                loss = loss + img_loss0
+                loss += img2mse(gradient, t_gradient)
+            
+            # coarse psnr (if coarse is not final)
+            psnr_0 = None
+            if 'rgb_0' in extras:
+                rgb_loss_0 = img2mse(extras['rgb_0'], t_rgb)
+                loss += rgb_loss_0
                 if args.use_depth:
-                    depth_loss0 = torch.abs(extras['depth0'] - target_d).mean()
-                    loss = loss + depth_loss0
+                    loss += torch.abs(extras['depth_0'] - t_depth).mean()
+
                 if args.use_gradient:
-                    grad_loss0 = img2mse(extras['grad0'], target_g)
-                    loss = loss + grad_loss0
-                    
-                psnr0 = mse2psnr(img_loss0)
+                    loss += img2mse(extras['grad_0'], t_gradient)
+
+                psnr_0 = mse2psnr(rgb_loss_0)
 
             loss.backward()
             optimizer.step()
+            # optimizer.zero_grad()
+            # # import pdb; pdb.set_trace()
+            # img_loss = img2mse(rgb, target_rgb)
+            # # depth_loss
+            # if args.use_depth:
+            #     depth_loss = torch.abs(dep - target_d).mean()
+            # else:
+            #     depth_loss = torch.tensor(0.0)
+                
+            # if args.use_gradient:
+            #     grad_loss = img2mse(grad, target_g)
+            # else:
+            #     grad_loss = torch.tensor(0.0)
+
+
+            # loss = img_loss + depth_loss + grad_loss
+            # psnr = mse2psnr(img_loss)
+
+            # if 'rgb0' in extras:
+            #     img_loss0 = img2mse(extras['rgb0'], target_rgb)
+            #     loss = loss + img_loss0
+            #     if args.use_depth:
+            #         depth_loss0 = torch.abs(extras['depth0'] - target_d).mean()
+            #         loss = loss + depth_loss0
+            #     if args.use_gradient:
+            #         grad_loss0 = img2mse(extras['grad0'], target_g)
+            #         loss = loss + grad_loss0
+                    
+            #     psnr0 = mse2psnr(img_loss0)
+
+            # loss.backward()
+            # optimizer.step()
 
             # NOTE: IMPORTANT!
             ###   update learning rate   ###
@@ -737,6 +904,7 @@ if __name__=='__main__':
 
     parser = config_parser()
     args = parser.parse_args()
+    args.seed = None
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

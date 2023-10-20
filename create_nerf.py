@@ -20,7 +20,7 @@ def create_nerf(args):
     """
     step 1: create embedding functions
 
-    TODO: how to create embed for st3d + hash?
+    TODO: how to create embed for equirect + hash?
     """
     embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
     if args.i_embed==1:
@@ -151,8 +151,17 @@ def create_nerf(args):
         'raw_noise_std' : args.raw_noise_std,
     }
 
+    models = {
+        "coarse": model,
+        "fine": model_fine
+    }
+    embedders = {
+        "pos": embed_fn,
+        "dir": embeddirs_fn
+    }
+
     # NDC only good for LLFF-style forward facing data
-    if (args.dataset_type not in ['llff', 'st3d']) or args.no_ndc:
+    if (args.dataset_type not in ['llff', 'equirect']) or args.no_ndc:
         print('Not ndc!')
         render_kwargs_train['ndc'] = False
         render_kwargs_train['lindisp'] = args.lindisp
@@ -161,24 +170,26 @@ def create_nerf(args):
     render_kwargs_test['perturb'] = False
     render_kwargs_test['raw_noise_std'] = 0.
 
+    return models, embedders, start, grad_vars, optimizer
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
-def get_embedder(multires, args, i=0):
+def get_embedder(name, args, multires=None, bbox=None):
     """
-    -1: no embedding
-    0: Standard positional encoding (Nerf, section 5.1)
-    1: Hashed pos encoding (Instant-ngp)
-    2: Spherical harmonic encoding (?)
+    none: no embedding
+    pos: Standard positional encoding (Nerf, section 5.1)
+    hash: Hashed pos encoding
+    sh: Spherical harmonic encoding
     """
-    if i == -1:
+    if name == "none":
         return nn.Identity(), 3
-    elif i == 0:
+    elif name == "pos":
+        assert multires is not None
         embed_kwargs = {
                     'include_input' : True,
                     'input_dims' : 3,
-                    'max_freq_log2' : multires-1,
-                    'num_freqs' : multires,
+                    'max_freq_log2' : multires - 1,
+                    'num_freqs' : multires, 
                     'log_sampling' : True,
                     'periodic_fns' : [torch.sin, torch.cos],
         }
@@ -186,12 +197,49 @@ def get_embedder(multires, args, i=0):
         embedder_obj = Embedder(**embed_kwargs)
         embed = lambda x, eo=embedder_obj : eo.embed(x)
         out_dim = embedder_obj.out_dim
-    elif i == 1:
-        embed = HashEmbedder(bounding_box=args.bounding_box, \
+    elif name == "hash":
+        assert bbox is not None
+        embed = HashEmbedder(bounding_box=bbox, \
                             log2_hashmap_size=args.log2_hashmap_size, \
                             finest_resolution=args.finest_res)
         out_dim = embed.out_dim
-    elif i == 2:
+    elif name == "sh":
         embed = SHEncoder()
         out_dim = embed.out_dim
+    else:
+        raise ValueError(f"Invalid embedding type {name}")
+
     return embed, out_dim
+
+
+# def get_embedder(multires, args, i=0):
+#     """
+#     -1: no embedding
+#     0: Standard positional encoding (Nerf, section 5.1)
+#     1: Hashed pos encoding (Instant-ngp)
+#     2: Spherical harmonic encoding (?)
+#     """
+#     if i == -1:
+#         return nn.Identity(), 3
+#     elif i == 0:
+#         embed_kwargs = {
+#                     'include_input' : True,
+#                     'input_dims' : 3,
+#                     'max_freq_log2' : multires-1,
+#                     'num_freqs' : multires,
+#                     'log_sampling' : True,
+#                     'periodic_fns' : [torch.sin, torch.cos],
+#         }
+        
+#         embedder_obj = Embedder(**embed_kwargs)
+#         embed = lambda x, eo=embedder_obj : eo.embed(x)
+#         out_dim = embedder_obj.out_dim
+#     elif i == 1:
+#         embed = HashEmbedder(bounding_box=args.bounding_box, \
+#                             log2_hashmap_size=args.log2_hashmap_size, \
+#                             finest_resolution=args.finest_res)
+#         out_dim = embed.out_dim
+#     elif i == 2:
+#         embed = SHEncoder()
+#         out_dim = embed.out_dim
+#     return embed, out_dim
