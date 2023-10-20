@@ -116,6 +116,7 @@ class EquirectTrainer(BaseTrainer):
         # final psnr
         # print(rgb.shape, t_rgb.shape)
         rgb_loss = img2mse(rgb, t_rgb)
+        psnr = mse2psnr(rgb_loss)
         loss = rgb_loss
         # depth_loss
         if self.args.use_depth:
@@ -123,7 +124,6 @@ class EquirectTrainer(BaseTrainer):
             
         if self.args.use_gradient:
             loss += img2mse(gradient, t_gradient)
-        psnr = mse2psnr(rgb_loss)
         
         # coarse psnr (if coarse is not final)
         psnr_0 = None
@@ -222,10 +222,10 @@ class EquirectTrainer(BaseTrainer):
         for idx in trange(rays_o.shape[0] // batch):
             start = idx * batch
             end = (idx + 1) * batch
-            rays, reshape_to = self.prepare_rays(self.cc,
-                                                 rays=[rays_o[start:end], 
-                                                rays_d[start:end]], 
-                                                ndc=False)
+            rays, reshape_to = \
+                self.prepare_rays(self.cc, 
+                                  rays=[rays_o[start:end], rays_d[start:end]], 
+                                  ndc=self.args.ndc)
             rgb, depth, _, _ = \
                 self.volren.render(rays=rays, reshape_to=reshape_to)
             

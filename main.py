@@ -221,8 +221,8 @@ if __name__ == '__main__':
     parser = config_parser()
     args = parser.parse_args()
     args.train_iters += 1
-    if args.dataset_type != 'llff':
-        args.ndc = False
+    ndc_list = ['llff', 'equirect']
+    args.ndc = args.dataset_type in ndc_list
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
