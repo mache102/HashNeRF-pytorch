@@ -218,15 +218,15 @@ class EquirectTrainer(BaseTrainer):
         h = self.h * self.args.render_factor 
         w = self.w * self.args.render_factor
 
-
         batch = h * w    
         for idx in trange(rays_o.shape[0] // batch):
             start = idx * batch
             end = (idx + 1) * batch
             rays, reshape_to = \
                 prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
-                             ndc=False)
-            preds, extras = \
+                             ndc=False, use_viewdirs=self.args.use_viewdirs)
+            # print(rays.shape)
+            preds, _ = \
                 self.volren.render(rays=rays, reshape_to=reshape_to)
             
             rgb, depth = preds["rgb_map"], preds["depth_map"]
