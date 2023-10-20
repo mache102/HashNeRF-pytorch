@@ -128,15 +128,6 @@ class VolumetricRenderer:
                 if k not in outputs:
                     outputs[k] = []
                 outputs[k].append(v)             
-
-            if self.N_importance > 0:
-                for k, v in batch_output["fine"].items():
-                    if k not in outputs:
-                        outputs[k] = []
-                    outputs[k].append(v)                      
-            
-            if "raw" in batch_output:
-                outputs["raw"].append(batch_output["raw"])
     
         outputs = {k: torch.cat(v, 0) for k, v in outputs.items()}
         outputs = {k: torch.reshape(v, reshape_to + list(v.shape[1:])) for k, v in outputs.items()}
