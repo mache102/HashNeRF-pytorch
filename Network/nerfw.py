@@ -6,11 +6,9 @@ import torch
 import torch.nn as nn
 
 class NeRFW(nn.Module):
-    def __init__(self, model_config,
-                 input_ch, input_ch_views,
-                 input_ch_a, input_ch_t,
-                 appearance: bool = False, 
-                 transient: bool = False):
+    def __init__(self, model_config, input_chs,
+                 use_appearance: bool = False, 
+                 use_transient: bool = False):
         """
         https://github.com/kwea123/nerf_pl/blob/nerfw/models/nerf.py
 
@@ -35,10 +33,9 @@ class NeRFW(nn.Module):
         """
         super().__init__()
 
-        self.input_ch = input_ch 
-        self.input_ch_views = input_ch_views
-        self.input_ch_a = input_ch_a if appearance else 0
-        self.input_ch_t = input_ch_t
+        self.input_chs = input_chs 
+        if not use_appearance: 
+            self.input_chs["appearance"] = 0
 
         self.sigma_skips = model_config["sigma"]["skips"]
         self.beta_min = model_config["beta_min"]
@@ -46,7 +43,7 @@ class NeRFW(nn.Module):
         self.make_sigma_net(model_config["sigma"])
         self.make_color_net(model_config["color"])
 
-        if transient:
+        if use_transient:
             self.make_transient_net(model_config["transient"])
 
     def make_sigma_net(self, s):
@@ -64,9 +61,9 @@ class NeRFW(nn.Module):
         sigma_net = []
         for l in range(layers):
             if l == 0:
-                layer = nn.Linear(self.input_ch, hdim)
+                layer = nn.Linear(self.input_chs["xyz"], hdim)
             elif l in s.skips: # skips for sigma only - not present in color net
-                layer = nn.Linear(hdim + self.input_ch, hdim)
+                layer = nn.Linear(hdim + self.input_chs["xyz"], hdim)
             else:
                 layer = nn.Linear(hdim, hdim)
 
@@ -93,7 +90,7 @@ class NeRFW(nn.Module):
 
         simple_net = False
         if simple_net:
-            color_in = hdim + self.input_ch_views + self.input_ch_a
+            color_in = hdim + self.input_chs["dir"] + self.input_chs["appearance"]
             self.color_net = \
                 nn.Sequential(
                     nn.Linear(color_in, hdim // 2), 
@@ -105,7 +102,7 @@ class NeRFW(nn.Module):
             for l in range(layers):
                 # the final layer is set at static_color
                 if l == 0:
-                    layer = nn.Linear(self.input_ch_views + geo_feat_dim, hdim)
+                    layer = nn.Linear(self.input_chs["dir"] + geo_feat_dim, hdim)
                 else:
                     layer = nn.Linear(hdim, hdim)
 
@@ -128,7 +125,7 @@ class NeRFW(nn.Module):
         transient_net = []
         for l in range(layers):
             if l == 0:
-                transient_net.append(nn.Linear(hdim + self.input_ch_t, hdim // 2))
+                transient_net.append(nn.Linear(hdim + self.input_chs["transient"], hdim // 2))
             else:
                 transient_net.append(nn.Linear(hdim // 2, hdim // 2))
             transient_net.append(nn.ReLU(True))
@@ -167,13 +164,13 @@ class NeRFW(nn.Module):
             input_sigma = x
         elif output_transient:
             input_sigma, input_color_a, input_t = \
-                torch.split(x, [self.input_ch,
-                                self.input_ch_views + self.input_ch_a,
-                                self.input_ch_t], dim=-1)
+                torch.split(x, [self.input_chs["xyz"],
+                                self.input_chs["dir"] + self.input_chs["appearance"],
+                                self.input_chs["transient"]], dim=-1)
         else:
             input_sigma, input_color_a = \
-                torch.split(x, [self.input_ch,
-                                self.input_ch_views + self.input_ch_a], dim=-1)
+                torch.split(x, [self.input_chs["xyz"],
+                                self.input_chs["dir"] + self.input_chs["appearance"]], dim=-1)
             
         """
         sigma network
@@ -230,17 +227,6 @@ class NeRFW(nn.Module):
                                transient_beta], 1) # (B, 5)
 
         return torch.cat([static, transient], 1) # (B, 9)
-    
 
 if __name__ == '__main__':
-    model = HashNeRF(num_layers=3,
-                 hdim=64,
-                 geo_feat_dim=15,
-                 num_layers_color=4,
-                 hidden_dim_color=64,
-                 input_ch=3, input_ch_views=3,)
-    
-    x = torch.rand(10, 6)
-    y = model(x)
-
-    import pdb; pdb.set_trace()
+    pass 

@@ -2,13 +2,15 @@ import json
 import os 
 import torch
 
-from networks.hash_nerf import HashNeRF
-from networks.vanilla_nerf import VanillaNeRF
-from radam import RAdam
+from Optimizer.radam import RAdam
 from ray_util import *
 from load.load_data import load_data
 
+
+from Network import get_networks
 from Embedder import get_embedders
+from Optimizer import get_optimizer
+
 from util import *
 from parse_args import config_parser
 
@@ -16,6 +18,8 @@ from trainers.equirect import EquirectTrainer
 from trainers.standard import StandardTrainer
 
 # 20231010 15:25
+NET_CONFIG_PATH = "Network/configs/"
+EMBED_CONFIG_PATH = "Embedder/configs/"
   
 def main():
     """
@@ -23,18 +27,15 @@ def main():
 
     1. Load dataset
     2. Create experiment savepath, savename, etc.
-    3. Load model config
-    4. Create embedding functions for position & viewdirs
-    5. Create coarse and fine models
-    6. Create optimizer
-    7. Load checkpoints if available
-    8. Create trainer
-    9a. Render/test/evaluate, no training
-    9b. Enter training loop
+    3. Create embedding functions
+    4. Create coarse and fine models
+    5. Create optimizer
+    6. Load checkpoints if available
+    7. Create trainer
+    8a. Render/test/evaluate, no training
+    8b. Enter training loop
     """
 
-    if args.use_viewdirs:
-        print("=== Using viewdirs ===")
     if args.N_importance > 0:
         print("=== Using fine model ===")
     if args.render_only:
@@ -58,99 +59,53 @@ def main():
     print("Saved configs")
 
     """
-    3. Load model config
+    3. Create embedding functions
     """
-    fp = os.path.join("model_configs", f"{args.model_config}.json")
+    fp = os.path.join(EMBED_CONFIG_PATH, f"{args.embed_config}.json")
+    if not os.path.isfile(fp):
+        raise ValueError(f"Embed configuration not found: {fp}")
+    with open(fp, "r") as f:
+        embedder_config = json.load(f)
+        print(f"Loaded embed config {args.embed_config}")
+
+    embedders = get_embedders(embedder_config, dataset)
+    input_chs = {}
+    for k in embedders:
+        if embedders[k] is None:
+            input_chs[k] = 0
+            continue
+        input_chs[k] = embedders[k].out_dim
+
+    em_xyz_params = None
+    if embedder_config["xyz"]["type"] == "hash":
+        # hashed embedding table
+        em_xyz_params = list(embedders["xyz"].parameters())
+    args.use_viewdirs = (embedder_config.get("viewdirs") is not None)
+    print("Embedders created")
+ 
+    """
+    4. Create coarse and fine models
+    """
+    fp = os.path.join(NET_CONFIG_PATH, f"{args.model_config}.json")
     if not os.path.isfile(fp):
         raise ValueError(f"Model configuration not found: {fp}")
     with open(fp, "r") as f:
         model_config = json.load(f)
         print(f"Loaded model config {args.model_config}")
+    models, grad_vars = get_networks(model_config, input_chs, args)
+    print("Models created")
 
     """
-    4. Create embedding functions for position & viewdirs
-    """
-    embedders = {
-        "pos": None,
-        "dir": None
-    }
-    # input ch as in model input ch
-    embedders["pos"], input_ch = get_embedders(name=args.i_embed, args=args, 
-                                              multires=args.multires,
-                                              bbox=dataset.bbox)
-    print(f"XYZ embedder: {args.i_embed}")
-    if args.i_embed == 'hash':
-        # hashed embedding table
-        pos_embedder_params = list(embedders["pos"].parameters())
+    5. Create optimizer
 
-    input_ch_views = 0
-    if args.use_viewdirs:
-        # if using hashed for xyz, use SH for views
-        print(f"viewdirs embedder: {args.i_embed_views}")
-        embedders["dir"], input_ch_views = get_embedders(name=args.i_embed_views,
-                                                        args=args, multires=args.multires_views,
-                                                        bbox=dataset.bbox)
+    Nothing much to configure here atm
+    (func for future expansion)
+    """
+    otyp = "radam" if embedder_config["xyz"]["type"] == "hash" else "adam"
+    optimizer = get_optimizer(otyp, grad_vars, args, em_xyz_params)
 
     """
-    5. Create coarse and fine models
-    """
-    models = {
-        "coarse": None,
-        "fine": None
-    }
-    if args.i_embed == "hash":
-        print("Coarse model: HashNeRF")
-        model_coarse = HashNeRF(model_config["coarse"], input_ch=input_ch, 
-                                input_ch_views=input_ch_views).to(device)
-        
-    elif not args.use_gradient:
-        print("Coarse model: VanillaNeRF")
-        if args.N_importance > 0:
-            model_config["coarse"]["output_ch"] += 1
-            model_config["fine"]["output_ch"] += 1
-        model_coarse = VanillaNeRF(model_config["coarse"], input_ch=input_ch, 
-                                   input_ch_views=input_ch_views, 
-                                   use_viewdirs=args.use_viewdirs,
-                                   use_gradient=args.use_gradient).to(device)
-    models["coarse"] = model_coarse
-    grad_vars = list(models["coarse"].parameters())
-
-    if args.N_importance > 0:
-        if args.i_embed == "hash":
-            print("Fine model: HashNeRF")
-            model_fine = HashNeRF(model_config["fine"], input_ch=input_ch, 
-                                    input_ch_views=input_ch_views).to(device)
-            
-        elif not args.use_gradient:
-            print("Fine model: VanillaNeRF")
-            model_fine = VanillaNeRF(model_config["fine"], input_ch=input_ch, 
-                                    input_ch_views=input_ch_views, 
-                                    use_viewdirs=args.use_viewdirs,
-                                    use_gradient=args.use_gradient).to(device)
-        models["fine"] = model_fine
-        grad_vars += list(models["fine"].parameters())
-
-    """
-    6. Create optimizer
-    """
-    if args.i_embed == "hash":
-        print("Optimizer: RAdam")
-        optimizer = \
-            RAdam([
-                {'params': grad_vars, 'weight_decay': 1e-6},
-                {'params': pos_embedder_params, 'eps': 1e-15}
-            ], lr=args.lr, betas=(0.9, 0.99))
-    else:
-        print("Optimizer: Adam")
-        optimizer = \
-            torch.optim.Adam(
-                params=grad_vars, 
-                lr=args.lr, 
-                betas=(0.9, 0.999)
-            )
-
-    """
-    7. Load checkpoints if available
+    6. Load checkpoints if available
     """
     global_step = 0
     if args.ft_path is not None and args.ft_path!='None':
@@ -174,12 +129,12 @@ def main():
         models["coarse"].load_state_dict(ckpt['coarse_model_state_dict'])
         if models["fine"] is not None:
             models["fine"].load_state_dict(ckpt['fine_model_state_dict'])
-        if args.i_embed == "hash":
-            embedders["pos"].load_state_dict(ckpt['pos_embedder_state_dict'])
+        if args.em_xyz == "hash":
+            embedders["xyz"].load_state_dict(ckpt['pos_embedder_state_dict'])
 
     args.global_step = global_step
     """
-    8. Create trainer
+    7. Create trainer
     """
     if args.dataset_type == "equirect":
         print("Using equirect trainer")
@@ -192,14 +147,14 @@ def main():
                      args=args)
 
     """
-    9a. Render/test/evaluate, no training
+    8a. Render/test/evaluate, no training
     """
     if args.render_only:
         render_only(trainer)
         return 
     
     """
-    9b. Enter training loop
+    8b. Enter training loop
     """
     print("Start training")
     trainer.fit()

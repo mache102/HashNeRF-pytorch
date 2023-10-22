@@ -1,0 +1,20 @@
+{
+    "xyz": {
+        "type": "positional",
+        "config": {
+            "max_log2": 9,
+            "N_freqs": 10,
+            "log_sampling": true,
+            "include_input": true
+        }
+    },
+    "dir": {
+        "type": "positional",
+        "config": {
+            "max_log2": 3,
+            "N_freqs": 4,
+            "log_sampling": true,
+            "include_input": true
+        }
+    }
+}

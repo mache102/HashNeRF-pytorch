@@ -13,6 +13,7 @@ from renderer import VolumetricRenderer
 from renderer_util import prepare_rays
 from ray_util import * 
 from util import *
+from math_util import to_8b, img2mse, mse2psnr, psnr
 
 from trainers.base import BaseTrainer 
 
@@ -185,8 +186,8 @@ class StandardTrainer(BaseTrainer):
         loss += sparsity_loss
 
         # add Total Variation loss
-        if self.args.i_embed == "hash":
-            em = self.embedders["pos"]
+        if self.args.em_xyz == "hash":
+            em = self.embedders["xyz"]
             TV_loss = sum(total_variation_loss(em, i) for i in range(em.n_levels))
             loss += self.args.tv_loss_weight * TV_loss
             if iter > 1000:
@@ -203,12 +204,12 @@ class StandardTrainer(BaseTrainer):
         """
         if iter % self.args.i_weights == 0:
             path = os.path.join(self.savepath, '{:06d}.tar'.format(iter))
-            if self.args.i_embed == "hash":
+            if self.args.em_xyz == "hash":
                 torch.save({
                     'global_step': self.global_step,
                     'coarse_model_state_dict': self.models["coarse"].state_dict(),
                     'fine_model_state_dict': self.models["fine"].state_dict(),
-                    'pos_embedder_state_dict': self.embedders["pos"].state_dict(),
+                    'xyz_embedder_state_dict': self.embedders["xyz"].state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                 }, path)
             else:

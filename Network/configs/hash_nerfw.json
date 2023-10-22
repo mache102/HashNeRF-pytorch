@@ -1,24 +1,39 @@
 {
     "coarse": {
+        "type": "nerfw",
         "sigma": {
+            "input_ch": null,
             "layers": 2,
             "hdim": 64,
             "geo_feat_dim": 15
         },
         "color": {
+            "input_ch": null,
             "layers": 3,
             "hdim": 64
         }
     },
     "fine": {
+        "type": "nerfw",
         "sigma": {
+            "input_ch": null,
             "layers": 2,
             "hdim": 64,
             "geo_feat_dim": 15
         },
         "color": {
+            "input_ch": null,
             "layers": 3,
             "hdim": 64
-        }
+        },
+        "appearance": {
+            "input_ch": 48
+        },
+        "transient": {
+            "input_ch": 16,
+            "layers": 4,
+            "hdim": 64
+        },
+        "beta_min": 0.03
     }
 }

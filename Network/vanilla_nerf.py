@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 
 class VanillaNeRF(nn.Module):
-    def __init__(self, model_config, 
-                 input_ch=3, input_ch_views=3,
+    def __init__(self, model_config, input_chs,
                  use_viewdirs=False, use_gradient=False):
         """ 
         Vanilla NeRF with an option to use gradient (OmniNeRF).
@@ -12,11 +11,25 @@ class VanillaNeRF(nn.Module):
         layers = model_config['layers']
         hdim = model_config['hdim']
         output_ch = model_config['output_ch']
-        self.skips = model_config['skips']
+        skips = model_config['skips']
+        input_chs = input_chs
         
         self.use_viewdirs = use_viewdirs
         self.use_gradient = use_gradient
-        
+
+        self.make_sigma_net(layers, hdim, input_chs["xyz"])
+        self.make_color_net(layers, hdim, input_chs["dir"])
+
+        if use_viewdirs:
+            self.feature_linear = nn.Linear(hdim, hdim)
+            self.alpha_linear = nn.Linear(hdim, 1)
+            self.rgb_linear = nn.Linear(hdim // 2, 3)
+            if self.use_gradient:
+                self.gradient_linear = nn.Linear(hdim // 2, 3)
+        else:
+            self.output_linear = nn.Linear(hdim, output_ch)
+
+    def make_sigma_net(self, layers, hdim, input_ch):   
         sigma_net = []
         for l in range(layers - 1):
             if l == 0:
@@ -28,30 +41,21 @@ class VanillaNeRF(nn.Module):
             sigma_net.append(nn.ReLU(True)) # relu
         self.sigma_net = nn.ModuleList(sigma_net)
 
-        use_code_release = True
+    def make_color_net(self, layers, hdim, input_ch, use_code_release=True):
         if use_code_release:
             ### Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
-            self.color_net = nn.ModuleList([nn.Linear(input_ch_views + hdim, hdim // 2)])
+            self.color_net = nn.ModuleList([nn.Linear(input_ch + hdim, hdim // 2)])
 
         else:
             ### Implementation according to the paper
             color_net = []
             for l in range(layers // 2):
                 if l == 0:
-                    color_net.append(nn.Linear(input_ch_views + hdim, hdim // 2))
+                    color_net.append(nn.Linear(input_ch + hdim, hdim // 2))
                 else:
                     color_net.append(nn.Linear(hdim // 2, hdim // 2))
                 color_net.append(nn.ReLU(True)) # relu
             self.color_net = nn.ModuleList(color_net)
-
-        if use_viewdirs:
-            self.feature_linear = nn.Linear(hdim, hdim)
-            self.alpha_linear = nn.Linear(hdim, 1)
-            self.rgb_linear = nn.Linear(hdim // 2, 3)
-            if self.use_gradient:
-                self.gradient_linear = nn.Linear(hdim // 2, 3)
-        else:
-            self.output_linear = nn.Linear(hdim, output_ch)
 
     def forward(self, x):
         # gradient option

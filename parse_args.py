@@ -7,8 +7,12 @@ def config_parser():
                         help='config file path')
     parser.add_argument("--nerf_type", type=str, default="vanilla_nerf",
                         help="nerf type [this parameter is WIP]")
+    parser.add_argument("--embed_config", type=str, default="positional",
+                        help="filename of embedders config")
     parser.add_argument('--model_config', type=str, default="vanilla_nerf",
                         help='model config name')
+
+    
     parser.add_argument("--expname", type=str,
                         help='experiment name')
     parser.add_argument("--basedir", type=str, default='./logs/',
@@ -22,23 +26,16 @@ def config_parser():
     parser.add_argument("--train_iters", type=int, default=200000,
                         help="number of iterations to train")
     parser.add_argument("--train_bsz", type=int, default=32*32*4,
-                        help='batch size (number of random rays per gradient step)')
-    parser.add_argument("--netdepth", type=int, default=8,
-                        help='layers in network')
-    parser.add_argument("--netwidth", type=int, default=256,
-                        help='channels per layer')
-    parser.add_argument("--netdepth_fine", type=int, default=8,
-                        help='layers in fine network')
-    parser.add_argument("--netwidth_fine", type=int, default=256,
-                        help='channels per layer in fine network')
+                        help='train batch size (number of random rays per gradient step)')
+    parser.add_argument("--proc_bsz", type=int, default=1024*32,
+                        help='number of rays processed in parallel, decrease if running out of memory')
+    parser.add_argument("--net_bsz", type=int, default=1024*64,
+                        help='number of pts sent through network in parallel, decrease if running out of memory')
     parser.add_argument("--lr", type=float, default=5e-4,
                         help='learning rate')
     parser.add_argument("--lr_decay", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')
-    parser.add_argument("--chunk", type=int, default=1024*32,
-                        help='number of rays processed in parallel, decrease if running out of memory')
-    parser.add_argument("--net_chunk", type=int, default=1024*64,
-                        help='number of pts sent through network in parallel, decrease if running out of memory')
+
     parser.add_argument("--use_batching", action='store_true',
                         help='only take random rays from 1 image at a time')
     parser.add_argument("--reload", action='store_true',
@@ -53,16 +50,6 @@ def config_parser():
                         help='number of additional fine samples per ray')
     parser.add_argument("--perturb", type=float, default=1.,
                         help='set to 0. for no jitter, 1. for jitter')
-    parser.add_argument("--use_viewdirs", action='store_true',
-                        help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=str, default="pos",
-                        help='none: none, pos: positional encoding, hash: hash encoding, sh: spherical harmonics')
-    parser.add_argument("--i_embed_views", type=str, default="pos",
-                        help='none: none, pos: positional encoding, hash: hash encoding, sh: spherical harmonics')
-    parser.add_argument("--multires", type=int, default=10,
-                        help='log2 of max freq for positional encoding (3D location)')
-    parser.add_argument("--multires_views", type=int, default=4,
-                        help='log2 of max freq for positional encoding (2D direction)')
     parser.add_argument("--raw_noise_std", type=float, default=0.,
                         help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
 
@@ -135,10 +122,6 @@ def config_parser():
     parser.add_argument("--i_video",   type=int, default=5000,
                         help='frequency of render_poses video saving')
 
-    parser.add_argument("--finest_res",   type=int, default=512,
-                        help='finest resolultion for hashed embedding')
-    parser.add_argument("--log2_hashmap_size",   type=int, default=19,
-                        help='log2 of hashmap size')
     parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
                         help='learning rate')
     parser.add_argument("--tv-loss-weight", type=float, default=1e-6,

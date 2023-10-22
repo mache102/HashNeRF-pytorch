@@ -61,8 +61,7 @@ class SHEncoder(nn.Module):
         self.C3 = coeffs.C3
         self.C4 = coeffs.C4
 
-
-    def forward(self, input, **kwargs):
+    def forward(self, input):
 
         result = torch.empty((*input.shape[:-1], self.out_dim), dtype=input.dtype, device=input.device)
         x, y, z = input.unbind(-1)

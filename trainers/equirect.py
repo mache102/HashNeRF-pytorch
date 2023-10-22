@@ -157,12 +157,12 @@ class EquirectTrainer(BaseTrainer):
         """
         if iter % self.args.i_weights == 0:
             path = os.path.join(self.savepath, '{:06d}.tar'.format(iter))
-            if self.args.i_embed == "hash":
+            if self.args.em_xyz == "hash":
                 torch.save({
                     'global_step': self.global_step,
                     'coarse_model_state_dict': self.models["coarse"].state_dict(),
                     'fine_model_state_dict': self.models["fine"].state_dict(),
-                    'pos_embedder_state_dict': self.embedders["pos"].state_dict(),
+                    'xyz_embedder_state_dict': self.embedders["xyz"].state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                 }, path)
             else:

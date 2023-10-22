@@ -1,11 +1,13 @@
 {
     "coarse": {
+        "type": "vanilla_nerf",
         "layers": 8,
         "hdim": 256,
         "output_ch": 4,
         "skips": [4]
     },
     "fine": {
+        "type": "vanilla_nerf",
         "layers": 8,
         "hdim": 256,
         "output_ch": 4,

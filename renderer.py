@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-from radam import RAdam
+from Optimizer.radam import RAdam
 
 from load.load_data import CameraConfig
 from util import debug_dict
@@ -88,8 +88,8 @@ class VolumetricRenderer:
         self.seed = args.seed 
         self.dataset_type = args.dataset_type
 
-        self.proc_bsz = args.chunk
-        self.net_bsz = args.net_chunk
+        self.proc_bsz = args.proc_bsz
+        self.net_bsz = args.net_bsz
         self.perturb = args.perturb
         self.N_samples = args.N_samples 
         self.N_importance = args.N_importance 
@@ -147,9 +147,9 @@ class VolumetricRenderer:
         """
         Prepare inputs (embed, concat) and apply network
         """
-        pos_ = inputs["pos"] # use this for reshaping (second to last line)
+        pos_ = inputs["xyz"] # use this for reshaping (second to last line)
         pos = pos_.reshape(-1, pos_.shape[-1])
-        pos_embed, keep_mask = self.embedders["pos"](pos)
+        pos_embed, keep_mask = self.embedders["xyz"](pos)
 
         if inputs.get("dir") is not None:
             dir = inputs["dir"]
@@ -234,7 +234,7 @@ class VolumetricRenderer:
         # concatenate positional samples
         # [N_rays, N_samples, 3]
         positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
-        raw = self.run_network(inputs={"pos": positional, "dir": viewdirs},
+        raw = self.run_network(inputs={"xyz": positional, "dir": viewdirs},
                                model_name="coarse")
         coarse_preds = self.raw2outputs(raw, z_vals, rays_d, 
                                         raw_noise_std=raw_noise_std)
@@ -252,7 +252,7 @@ class VolumetricRenderer:
             # [N_rays, N_samples + N_importance, 3]
             positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
             model_name = "fine" if self.models["fine"] is not None else "coarse"
-            raw = self.run_network(inputs={"pos": positional, "dir": viewdirs},
+            raw = self.run_network(inputs={"xyz": positional, "dir": viewdirs},
                                    model_name=model_name)
 
             fine_preds = self.raw2outputs(raw, z_vals, rays_d, 

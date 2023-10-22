@@ -66,8 +66,8 @@ def create_meshgrid_np(H, W, normalized_coordinates=True):
 
 
 def create_expname(args):
-    args.expname += f"_{args.i_embed}XYZ"
-    args.expname += f"_{args.i_embed_views}VIEW"
+    args.expname += f"_{args.em_xyz}XYZ"
+    args.expname += f"_{args.em_views}VIEW"
     
     args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
     args.expname += "_lr"+str(args.lr) + "_decay"+str(args.lr_decay)
