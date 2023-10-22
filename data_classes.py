@@ -16,7 +16,7 @@ class CameraConfig:
     k: Optional[np.ndarray] = None
 
     def __post_init__(self):
-        if self.k is None:
+        if self.k is None and self.focal is not None:
             self.k = np.array([
                 [self.focal, 0, 0.5 * self.width],
                 [0, self.focal, 0.5 * self.height],

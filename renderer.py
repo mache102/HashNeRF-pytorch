@@ -337,53 +337,9 @@ class VolumetricRenderer:
             pdb.set_trace()
         sparsity_loss = entropy
 
-        return RayPredictions(rgb_map, depth_map, disparity_map, 
-                                accumulation_map, weights, sparsity_loss)
-
-
-    # Hierarchical sampling (section 5.2)
-    # def sample_pdf(self, bins, weights, det=False, eps=1e-5):
-    #     """
-    #     Sample N_samples samples from bins with distribution defined by weights.
-    #     Inputs:
-    #         bins: (N_rays, N_samples_+1) where N_samples_ is "the number of coarse samples per ray - 2"
-    #         weights: (N_rays, N_samples_)
-    #         N_samples: the number of samples to draw from the distribution
-    #         det: deterministic or not
-    #         eps: a small number to prevent division by zero
-    #     Outputs:
-    #         samples: the sampled samples
-    #     """
-    #     N_samples = self.N_importance 
-
-    #     N_rays, N_samples_ = weights.shape
-    #     weights = weights + eps # prevent division by zero
-    #     pdf = weights / reduce(weights, 'n1 n2 -> n1 1', 'sum') # (N_rays, N_samples) (keep dims)
-    #     cdf = torch.cumsum(pdf, -1) # (N_rays, N_samples), cumulative distribution function
-    #     cdf = torch.cat([torch.zeros_like(cdf[: ,:1]), cdf], -1)  # (N_rays, N_samples_+1) 
-    #                                                             # padded to 0~1 inclusive
-
-    #     if det:
-    #         u = torch.linspace(0, 1, N_samples, device=bins.device)
-    #         u = u.expand(N_rays, N_samples)
-    #     else:
-    #         u = torch.rand(N_rays, N_samples, device=bins.device)
-    #     u = u.contiguous()
-
-    #     inds = torch.searchsorted(cdf, u, right=True)
-    #     below = torch.clamp_min(inds-1, 0)
-    #     above = torch.clamp_max(inds, N_samples_)
-
-    #     inds_sampled = rearrange(torch.stack([below, above], -1), 'n1 n2 c -> n1 (n2 c)', c=2)
-    #     cdf_g = rearrange(torch.gather(cdf, 1, inds_sampled), 'n1 (n2 c) -> n1 n2 c', c=2)
-    #     bins_g = rearrange(torch.gather(bins, 1, inds_sampled), 'n1 (n2 c) -> n1 n2 c', c=2)
-
-    #     denom = cdf_g[...,1]-cdf_g[...,0]
-    #     denom[denom<eps] = 1 # denom equals 0 means a bin has weight 0, in which case it will not be sampled
-    #                         # anyway, therefore any value for it is fine (set to 1 here)
-
-    #     samples = bins_g[...,0] + (u-cdf_g[...,0])/denom * (bins_g[...,1]-bins_g[...,0])
-    #     return samples
+        return RayPredictions(rgb=rgb_map, depth=depth_map, disparity=disparity_map,
+                                accumulation=accumulation_map, weights=weights,
+                                sparsity_loss=sparsity_loss)
 
     def sample_pdf(self, bins, weights, det=False):
         N_samples = self.N_importance
@@ -399,17 +355,6 @@ class VolumetricRenderer:
             u = u.expand(list(cdf.shape[:-1]) + [N_samples])
         else:
             u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
-
-        # Pytest, overwrite u with numpy's fixed random numbers
-        # if pytest:
-        #     np.random.seed(0)
-        #     new_shape = list(cdf.shape[:-1]) + [N_samples]
-        #     if det:
-        #         u = np.linspace(0., 1., N_samples)
-        #         u = np.broadcast_to(u, new_shape)
-        #     else:
-        #         u = np.random.rand(*new_shape)
-        #     u = torch.Tensor(u)
 
         # Invert CDF
         u = u.contiguous()
