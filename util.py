@@ -4,14 +4,10 @@ import imageio
 import matplotlib.pyplot as plt
 
 import torch
-import torch.nn as nn
 
-from embedding.embedder import Embedder
-from embedding.hash_encoding import HashEmbedder 
-from embedding.spherical_harmonic import SHEncoder
+from math_util import to_8b
 
 # TODO: reorganize utils
-
 def get_transform_matrix(translation, rotation):
     """
     torch tensor transformation matrix 
@@ -106,17 +102,6 @@ def shuffle_rays(rays, seed=None):
     return rays
 
 
-def to_8b(x):
-    return (255 * np.clip(x, 0, 1)).astype(np.uint8)
-
-def psnr(pred_img, gt_img):
-    return -10. * np.log10(np.mean(np.square(pred_img - gt_img)))
-
-def img2mse(x, y):
-    return torch.mean((x - y) ** 2)
-
-def mse2psnr(x):
-    return -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
 
 def save_configs(args):
     with open(os.path.join(args.savepath, 'args.txt'), 'w') as file:
@@ -181,39 +166,3 @@ def save_imgs(rgb, depth, idx, savepath,
     else:
         raise NotImplementedError
     
-def get_embedder(name, args, multires=None, bbox=None):
-    """
-    none: no embedding
-    pos: Standard positional encoding (Nerf, section 5.1)
-    hash: Hashed pos encoding
-    sh: Spherical harmonic encoding
-    """
-    if name == "none":
-        return nn.Identity(), 3
-    elif name == "pos":
-        assert multires is not None
-        embed_kwargs = {
-                    'include_input' : True,
-                    'input_dims' : 3,
-                    'max_freq_log2' : multires - 1,
-                    'num_freqs' : multires, 
-                    'log_sampling' : True,
-                    'periodic_fns' : [torch.sin, torch.cos],
-        }
-        
-        embedder_obj = Embedder(**embed_kwargs)
-        embed = lambda x, eo=embedder_obj : eo.embed(x)
-        out_dim = embedder_obj.out_dim
-    elif name == "hash":
-        assert bbox is not None
-        embed = HashEmbedder(bounding_box=bbox, \
-                            log2_hashmap_size=args.log2_hashmap_size, \
-                            finest_resolution=args.finest_res)
-        out_dim = embed.out_dim
-    elif name == "sh":
-        embed = SHEncoder()
-        out_dim = embed.out_dim
-    else:
-        raise ValueError(f"Invalid embedding type {name}")
-
-    return embed, out_dim

@@ -8,6 +8,7 @@ from radam import RAdam
 from ray_util import *
 from load.load_data import load_data
 
+from Embedder import get_embedders
 from util import *
 from parse_args import config_parser
 
@@ -74,7 +75,7 @@ def main():
         "dir": None
     }
     # input ch as in model input ch
-    embedders["pos"], input_ch = get_embedder(name=args.i_embed, args=args, 
+    embedders["pos"], input_ch = get_embedders(name=args.i_embed, args=args, 
                                               multires=args.multires,
                                               bbox=dataset.bbox)
     print(f"XYZ embedder: {args.i_embed}")
@@ -86,7 +87,7 @@ def main():
     if args.use_viewdirs:
         # if using hashed for xyz, use SH for views
         print(f"viewdirs embedder: {args.i_embed_views}")
-        embedders["dir"], input_ch_views = get_embedder(name=args.i_embed_views,
+        embedders["dir"], input_ch_views = get_embedders(name=args.i_embed_views,
                                                         args=args, multires=args.multires_views,
                                                         bbox=dataset.bbox)
 

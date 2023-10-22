@@ -6,7 +6,9 @@ import torch
 import torch.nn as nn
 
 class NeRFW(nn.Module):
-    def __init__(self, typ, model_config,
+    def __init__(self, model_config,
+                 input_ch, input_ch_views,
+                 input_ch_a, input_ch_t,
                  appearance: bool = False, 
                  transient: bool = False):
         """
@@ -27,29 +29,25 @@ class NeRFW(nn.Module):
         encode_transient: whether to add transient encoding as input (NeRF-U)
         input_ch_t: transient embedding dimension. n^(tau) in the paper
         beta_min: minimum pixel color variance
+
+
+        do not encode transient for coarse model
         """
         super().__init__()
-        self.typ = typ
-        self.sigma = sigma
-        self.color = color
 
-        """
-        NerfW parameters
-        """
-        self.encode_appearance = encode_appearance
-        self.input_ch_a = input_ch_a if encode_appearance else 0
-
-        self.encode_transient = False if typ=='coarse' else encode_transient
+        self.input_ch = input_ch 
+        self.input_ch_views = input_ch_views
+        self.input_ch_a = input_ch_a if appearance else 0
         self.input_ch_t = input_ch_t
 
-        self.beta_min = beta_min
+        self.sigma_skips = model_config["sigma"]["skips"]
+        self.beta_min = model_config["beta_min"]
 
-        self.make_sigma_net(sigma)
-        self.make_color_net(color)
+        self.make_sigma_net(model_config["sigma"])
+        self.make_color_net(model_config["color"])
 
-        if self.encode_transient:
-            self.make_transient_net(input_ch=input_ch_t, layers=4,
-                                    hdim=sigma.hdim)
+        if transient:
+            self.make_transient_net(model_config["transient"])
 
     def make_sigma_net(self, s):
         """
@@ -60,22 +58,25 @@ class NeRFW(nn.Module):
 
         s = sigma
         """
+        hdim = s["hdim"]
+        layers = s["layers"]
+
         sigma_net = []
-        for l in range(s.layers):
+        for l in range(layers):
             if l == 0:
-                layer = nn.Linear(s.input_ch, s.hdim)
+                layer = nn.Linear(self.input_ch, hdim)
             elif l in s.skips: # skips for sigma only - not present in color net
-                layer = nn.Linear(s.hdim + s.input_ch, s.hdim)
+                layer = nn.Linear(hdim + self.input_ch, hdim)
             else:
-                layer = nn.Linear(s.hdim, s.hdim)
+                layer = nn.Linear(hdim, hdim)
 
             layer = nn.Sequential(layer, nn.ReLU(True))
             sigma_net.append(layer)
         
         self.sigma_net = nn.ModuleList(sigma_net)
-        self.sigma_net_final = nn.Linear(s.hdim, s.hdim)   
+        self.sigma_net_final = nn.Linear(hdim, hdim)   
 
-        self.static_sigma = nn.Sequential(nn.Linear(s.hdim, 1), nn.Softplus())
+        self.static_sigma = nn.Sequential(nn.Linear(hdim, 1), nn.Softplus())
 
     def make_color_net(self, c):
         """
@@ -86,44 +87,48 @@ class NeRFW(nn.Module):
 
         c = color
         """
+        hdim = c["hdim"]
+        layers = c["layers"]
+        geo_feat_dim = c["geo_feat_dim"]
 
         simple_net = False
         if simple_net:
-            color_in = c.hdim + c.input_ch + self.input_ch_a
+            color_in = hdim + self.input_ch_views + self.input_ch_a
             self.color_net = \
                 nn.Sequential(
-                    nn.Linear(color_in, c.hdim // 2), 
+                    nn.Linear(color_in, hdim // 2), 
                     nn.ReLU(True)
                 )
         else:
             color_net = []
 
-            for l in range(c.layers):
+            for l in range(layers):
                 # the final layer is set at static_color
                 if l == 0:
-                    layer = nn.Linear(c.input_ch + c.geo_feat_dim, c.hdim)
+                    layer = nn.Linear(self.input_ch_views + geo_feat_dim, hdim)
                 else:
-                    layer = nn.Linear(c.hdim, c.hdim)
+                    layer = nn.Linear(hdim, hdim)
 
-                layer = nn.Sequential(layer, nn.ReLU(True))
-                color_net.append(layer)
+                color_net.extend((layer, nn.ReLU(True)))
             
-            self.color_net = nn.ModuleList(color_net)
+            self.color_net = nn.Sequential(*color_net)
 
         self.static_color = nn.Sequential(nn.Linear(c.hdim // 2, 3), nn.Sigmoid())
 
-    def make_transient_net(self, input_ch: int, layers: int, hdim: int):
+    def make_transient_net(self, t):
         """
         Make MLP network that outputs transient components
         (uncertainty: beta, color: rgb, density: sigma)
 
         (MLP3 in nerfw paper)
         """
+        hdim = t["hdim"]
+        layers = t["layers"]
 
         transient_net = []
         for l in range(layers):
             if l == 0:
-                transient_net.append(nn.Linear(hdim + input_ch, hdim // 2))
+                transient_net.append(nn.Linear(hdim + self.input_ch_t, hdim // 2))
             else:
                 transient_net.append(nn.Linear(hdim // 2, hdim // 2))
             transient_net.append(nn.ReLU(True))
@@ -162,13 +167,13 @@ class NeRFW(nn.Module):
             input_sigma = x
         elif output_transient:
             input_sigma, input_color_a, input_t = \
-                torch.split(x, [self.sigma.input_ch,
-                                self.color.input_ch + self.input_ch_a,
+                torch.split(x, [self.input_ch,
+                                self.input_ch_views + self.input_ch_a,
                                 self.input_ch_t], dim=-1)
         else:
             input_sigma, input_color_a = \
-                torch.split(x, [self.sigma.input_ch,
-                                self.color.input_ch + self.input_ch_a], dim=-1)
+                torch.split(x, [self.input_ch,
+                                self.input_ch_views + self.input_ch_a], dim=-1)
             
         """
         sigma network
@@ -176,8 +181,8 @@ class NeRFW(nn.Module):
         input_sigma: xyz/pos inputs
         """
         sigma_ = input_sigma
-        for i in range(self.sigma.layers):
-            if i in self.sigma.skips:
+        for i in range(len(self.sigma_net)):
+            if i in self.sigma_skips:
                 sigma_ = torch.cat([input_sigma, sigma_], 1)
         
             sigma_ = self.sigma_net[i](sigma_)
@@ -195,7 +200,7 @@ class NeRFW(nn.Module):
         sigma_net_final: output from the sigma net
         input_color_a: viewdirs & appearance embeddings, concatenated
 
-        # concatenate signa encoded & (viewdirs + appearance embedding)
+        # concatenate sigma encoded & (viewdirs + appearance embedding)
         # input to color net 
         # finally obtain color (static) outputs
         # which concludes the static outputs
@@ -225,9 +230,6 @@ class NeRFW(nn.Module):
                                transient_beta], 1) # (B, 5)
 
         return torch.cat([static, transient], 1) # (B, 9)
-    
-
-
     
 
 if __name__ == '__main__':

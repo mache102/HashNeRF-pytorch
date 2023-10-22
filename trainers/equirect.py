@@ -12,6 +12,7 @@ from renderer_util import prepare_rays
 from ray_util import * 
 from util import *
 
+from math_util import to_8b, img2mse, mse2psnr
 from trainers.base import BaseTrainer 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

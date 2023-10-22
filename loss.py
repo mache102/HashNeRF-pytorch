@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 import pdb
 
-from embedding.hash_encoding import hash
+from Embedder.hash_encoding import hash
 
 
 def total_variation_loss(embedder, level):
