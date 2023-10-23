@@ -75,6 +75,7 @@ class EquirectTrainer(BaseTrainer):
                 self.next_batch_idx = 0 # reset
 
             # optimize
+            # (train_bsz, ?) and (train_bsz,)
             rays, og_shape = prepare_rays(self.cc, rays=[batch["o"], batch["d"]], 
                                             ndc=False, use_viewdirs=self.args.use_viewdirs)
             preds, extras = self.volren.render(rays=rays, og_shape=og_shape)

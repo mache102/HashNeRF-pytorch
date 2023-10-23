@@ -38,7 +38,7 @@ def get_networks(model_config, input_chs, args):
         print("COARSE model: HashNeRF")
 
     # fine model
-    if args.N_importance > 0:
+    if args.fine_samples > 0:
         if fine_type == "vanilla_nerf":
             models["fine"] = VanillaNeRF(model_config["fine"], input_chs=input_chs, 
                                     use_viewdirs=args.use_viewdirs,

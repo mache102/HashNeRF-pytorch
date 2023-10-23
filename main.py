@@ -36,7 +36,7 @@ def main():
     8b. Enter training loop
     """
 
-    if args.N_importance > 0:
+    if args.fine_samples > 0:
         print("=== Using fine model ===")
     if args.render_only:
         print("=== Rendering only ===")

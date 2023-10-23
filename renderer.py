@@ -77,8 +77,8 @@ class VolumetricRenderer:
         render_bsz: num of rays processed/rendered in parallel, adjust to prevent OOM
         net_bsz: num of rays sent to model in parallel (render_bsz % net_bsz == 0)
         perturb: 0 for uniform sampling, 1 for jittered (stratified rand points) sampling
-        N_samples: num of coarse samples per ray
-        N_importance: num of additional fine samples per ray
+        coarse_samples: num of coarse samples per ray
+        fine_samples: num of additional fine samples per ray
         use_viewdirs: whether to use full 5D input (+dirs) instead of 3D
         white_bkgd: whether to assume white background
         raw_noise_std: std dev of noise added to regularize sigma_a output, 1e0 recommended
@@ -90,8 +90,8 @@ class VolumetricRenderer:
         self.render_bsz = args.render_bsz
         self.net_bsz = args.net_bsz
         self.perturb = args.perturb
-        self.N_samples = args.N_samples 
-        self.N_importance = args.N_importance 
+        self.coarse_samples = args.coarse_samples 
+        self.fine_samples = args.fine_samples 
         self.use_viewdirs = args.use_viewdirs
         self.white_bkgd = args.white_bkgd
         self.raw_noise_std = args.raw_noise_std 
@@ -108,8 +108,7 @@ class VolumetricRenderer:
         Rendering entry function
 
         Args:
-        rays: array of shape [2, batch_size, 3]. Ray origin and direction for
-            each example in batch.
+        rays: concatenated rays of shape (train_bsz, ?)
         og_shape: shape to reshape outputs to.
         
         Returns:
@@ -122,6 +121,7 @@ class VolumetricRenderer:
 
         outputs = {}
         for i in range(0, total_rays, self.render_bsz):
+            # (render_bsz, ?)
             batch_output = self.render_batch(rays[i:i + self.render_bsz], **kwargs)
             for k, v in batch_output.items():
                 if k not in outputs:
@@ -142,33 +142,37 @@ class VolumetricRenderer:
         ret_extra = {k: outputs[k] for k in outputs if k not in priority}
         return ret_main, ret_extra
 
-    def run_network(self, inputs, model_name):
+    def run_network(self, inputs, model):
         """
         Prepare inputs (embed, concat) and apply network
+
+        inputs
+            xyz: (render_bsz, coarse_samples, 3)
+            dir: (render_bsz, 3)
+        
+        model: coarse or fine
         """
-        pos_ = inputs["xyz"] # use this for reshaping (second to last line)
-        pos = pos_.reshape(-1, pos_.shape[-1])
-        pos_embed, keep_mask = self.embedders["xyz"](pos)
+        xyz_shape = inputs["xyz"].shape
+        xyz = rearrange(inputs["xyz"], 'r cs c -> (r cs) c') # (render_bsz * coarse_samples, 3)
+        em_xyz, keep_mask = self.embedders["xyz"](xyz)
 
-        if inputs.get("dir") is not None:
+        if self.args.use_viewdirs:
             dir = inputs["dir"]
-            # expand with the original pos input shape!
-            # mistakenly used pos instead of pos_
-            dir = dir[:, None].expand(pos_.shape) 
-            dir = dir.reshape(-1, dir.shape[-1])
-            dir_embed = self.embedders["dir"](dir)
+            dir = rearrange(dir, 'r c -> r () c').expand(xyz_shape)
+            dir = rearrange(dir, 'r cs c -> (r cs) c') # (render_bsz * coarse_samples, 3)
+            em_dir = self.embedders["dir"](dir)
 
-            embeds = torch.cat([pos_embed, dir_embed], -1)
+            embeds = torch.cat([em_xyz, em_dir], -1)
         else:
-            embeds = pos_embed
+            embeds = em_xyz
 
         outputs = []
         for i in range(0, embeds.shape[0], self.net_bsz):
-            outputs.append(self.models[model_name](embeds[i:i + self.net_bsz]))
+            outputs.append(self.models[model](embeds[i:i + self.net_bsz]))
 
         outputs = torch.cat(outputs, 0)
         outputs[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
-        outputs = torch.reshape(outputs, list(pos_.shape[:-1]) + [outputs.shape[-1]])
+        outputs = torch.reshape(outputs, list(xyz_shape[:-1]) + [outputs.shape[-1]])
         return outputs
     
     def render_batch(self, rays, verbose=False, 
@@ -188,8 +192,7 @@ class VolumetricRenderer:
         rgb0: See rgb_map. Output for coarse model.
         disp0: See disparity_map. Output for coarse model.
         acc0: See accumulation_map. Output for coarse model.
-        z_std: [num_rays]. Standard deviation of distances along ray for each
-            sample.
+        z_std: [num_rays]. Standard deviation of distances along ray for each sample.
         """
         if test is True:
             perturb = self.perturb_test
@@ -199,44 +202,45 @@ class VolumetricRenderer:
             raw_noise_std = self.raw_noise_std
 
         # unpack batch of rays
-        render_bsz = self.render_bsz
-        rays_o = rays[:, 0:3] # [render_bsz, 3]
-        rays_d = rays[:, 3:6] # [render_bsz, 3]
-        bounds = rearrange(rays[:, 6:8], 'n b -> n () b') # [render_bsz, 2] -> [render_bsz, 1, 2]
-        near, far = bounds[...,0], bounds[...,1] # [render_bsz, 1] each
-        viewdirs = rays[:, 8:11] if rays.shape[-1] > 8 else None # [render_bsz, 3]
-
+        rays_o = rays[:, 0:3] # (render_bsz, 3)
+        rays_d = rays[:, 3:6] # (render_bsz, 3)
+        near = rays[:, 6].unsqueeze(-1) # (render_bsz, 1)
+        far = rays[:, 7].unsqueeze(-1) # (render_bsz, 1)
+        viewdirs = rays[:, 8:11] if rays.shape[-1] > 8 else None # (render_bsz, 3)
 
         # prepare for sampling
-        t_vals = torch.linspace(0., 1., steps=self.N_samples)
+        t_vals = torch.linspace(0., 1., steps=self.coarse_samples)
+        # (render_bsz, coarse_samples)
         if not self.lindisp:
             z_vals = near * (1. - t_vals) + far * (t_vals)
         else:
             z_vals = 1. / (1. / near * (1. - t_vals) + 1. / far * (t_vals))
 
-        z_vals = z_vals.expand([render_bsz, self.N_samples])
-
         if perturb > 0.:
             # get intervals between samples
-            mids = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
-            upper = torch.cat([mids, z_vals[..., -1:]], -1)
-            lower = torch.cat([z_vals[..., :1], mids], -1)
+            # mid: (render_bsz, coarse_samples - 1)
+            # upper, lower: same as z_vals
+            mids = .5 * (z_vals[:, 1:] + z_vals[:, :-1])
+            upper = torch.cat([mids, z_vals[:, -1:]], -1)
+            lower = torch.cat([z_vals[:, :1], mids], -1)
             # stratified samples in those intervals
             t_rand = torch.rand(z_vals.shape)
-
-            z_vals = lower + (upper - lower) * t_rand
+            z_vals = lower + (upper - lower) * t_rand # same shape
 
         # concatenate positional samples
-        # [render_bsz, N_samples, 3]
-        positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
+        # (render_bsz, coarse_samples, 3)
+        rearrange(rays_o, 'r c -> r () c')
+        positional = rearrange(rays_o, 'r c -> r () c') \
+                   + rearrange(rays_d, 'r c -> r () c') \
+                   * rearrange(z_vals, 'r cs -> r cs ()')
         raw = self.run_network(inputs={"xyz": positional, "dir": viewdirs},
-                               model_name="coarse")
+                               model="coarse")
         coarse_preds = self.raw2outputs(raw, z_vals, rays_d, 
                                         raw_noise_std=raw_noise_std)
         weights = coarse_preds.weights
 
-        if self.N_importance > 0:
-            z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
+        if self.fine_samples > 0:
+            z_vals_mid = .5 * (z_vals[:,1:] + z_vals[:,:-1])
             z_samples = self.sample_pdf(z_vals_mid, weights[...,1:-1], 
                                 det=(perturb==0.))
             z_samples = z_samples.detach()
@@ -244,16 +248,16 @@ class VolumetricRenderer:
             z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
 
             # concatenate positional samples
-            # [render_bsz, N_samples + N_importance, 3]
-            positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
+            # [render_bsz, coarse_samples + fine_samples, 3]
+            positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[:, :, None] 
             model_name = "fine" if self.models["fine"] is not None else "coarse"
             raw = self.run_network(inputs={"xyz": positional, "dir": viewdirs},
-                                   model_name=model_name)
+                                   model=model_name)
 
             fine_preds = self.raw2outputs(raw, z_vals, rays_d, 
                                             raw_noise_std=raw_noise_std)
 
-        if self.N_importance > 0:
+        if self.fine_samples > 0:
             ret = {
                 "rgb_map_0": coarse_preds.rgb,
                 "depth_map_0": coarse_preds.depth,
@@ -300,17 +304,17 @@ class VolumetricRenderer:
         raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
 
         # differences of z vals = dists. last value is 1e10 (astronomically large in the context)
-        dists = z_vals[...,1:] - z_vals[...,:-1]
-        dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [render_bsz, N_samples]
+        dists = z_vals[:,1:] - z_vals[:,:-1]
+        dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [render_bsz, coarse_samples]
         dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
 
-        rgb = torch.sigmoid(raw[...,:3])  # [render_bsz, N_samples, 3]
+        rgb = torch.sigmoid(raw[...,:3])  # [render_bsz, coarse_samples, 3]
         noise = 0.
         if raw_noise_std > 0.: # sigma
             noise = torch.randn(raw[...,3].shape) * raw_noise_std
 
         # sigma_loss = sigma_sparsity_loss(raw[...,3])
-        alpha = raw2alpha(raw[...,3] + noise, dists)  # [render_bsz, N_samples]
+        alpha = raw2alpha(raw[...,3] + noise, dists)  # [render_bsz, coarse_samples]
         # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
 
         ones = torch.ones((alpha.shape[0], 1))
@@ -337,7 +341,7 @@ class VolumetricRenderer:
                                 sparsity_loss=sparsity_loss)
 
     def sample_pdf(self, bins, weights, det=False):
-        N_samples = self.N_importance
+        coarse_samples = self.fine_samples
         # Get pdf
         weights = weights + 1e-5 # prevent nans
         pdf = weights / torch.sum(weights, -1, keepdim=True)
@@ -346,17 +350,17 @@ class VolumetricRenderer:
 
         # Take uniform samples
         if det:
-            u = torch.linspace(0., 1., steps=N_samples)
-            u = u.expand(list(cdf.shape[:-1]) + [N_samples])
+            u = torch.linspace(0., 1., steps=coarse_samples)
+            u = u.expand(list(cdf.shape[:-1]) + [coarse_samples])
         else:
-            u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
+            u = torch.rand(list(cdf.shape[:-1]) + [coarse_samples])
 
         # Invert CDF
         u = u.contiguous()
         inds = torch.searchsorted(cdf, u, right=True)
         below = torch.max(torch.zeros_like(inds-1), inds-1)
         above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
-        inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
+        inds_g = torch.stack([below, above], -1)  # (batch, coarse_samples, 2)
 
         # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
         # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
@@ -440,18 +444,18 @@ if __name__ == '__main__':
     testing purposes only
     """
     render_bsz = 4
-    N_samples = 101
+    coarse_samples = 101
 
     n, f = 0.2, 0.6
-    t = np.linspace(0, 1, N_samples)
+    t = np.linspace(0, 1, coarse_samples)
 
     z = 1 / ((1 - t) / n + t / f)
 
-    z = np.broadcast_to(z, (render_bsz, N_samples))
+    z = np.broadcast_to(z, (render_bsz, coarse_samples))
 
     rays_d = np.random.rand(render_bsz, 3)
 
-    pts = rays_d[...,None,:] * z[...,:,None] # [render_bsz, N_samples, 3]
+    pts = rays_d[...,None,:] * z[...,:,None] # [render_bsz, coarse_samples, 3]
 
     # plot all pts 
     fig = plt.figure()
