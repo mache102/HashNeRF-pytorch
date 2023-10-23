@@ -1,0 +1,35 @@
+{
+    "xyz": {
+        "type": "hash",
+        "config": {
+            "name": "hash",
+            "n_levels": 16,
+            "n_features_per_level": 2,
+            "log2_hashmap_size": 19,
+            "base_resolution": 16,
+            "finest_resolution": 512
+        }
+    },
+    "dir": {
+        "type": "sh",
+        "config": {
+            "name": "sh",
+            "input_dim": 3,
+            "degree": 4
+        }
+    },
+    "appearance": {
+        "type": "linear",
+        "config": {
+            "samples": 1000,
+            "hdim": 64
+        }
+    },
+    "transient": {
+        "type": "linear",
+        "config": {
+            "samples": 1000,
+            "hdim": 64
+        }
+    }
+}

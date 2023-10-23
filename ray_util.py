@@ -117,21 +117,21 @@ def get_ndc_rays(H, W, focal, near, rays_o, rays_d):
 
     Inputs:
         H, W, focal: image height, width and focal length
-        near: (N_rays) or float, the depths of the near plane
-        rays_o: (N_rays, 3), the origin of the rays in world coordinate
-        rays_d: (N_rays, 3), the direction of the rays in world coordinate
+        near: (render_bsz) or float, the depths of the near plane
+        rays_o: (render_bsz, 3), the origin of the rays in world coordinate
+        rays_d: (render_bsz, 3), the direction of the rays in world coordinate
 
     Outputs:
-        rays_o: (N_rays, 3), the origin of the rays in NDC
-        rays_d: (N_rays, 3), the direction of the rays in NDC
+        rays_o: (render_bsz, 3), the origin of the rays in NDC
+        rays_d: (render_bsz, 3), the direction of the rays in NDC
     """
     # Shift ray origins to near plane
-    # (N_rays) or (H, W)
+    # (render_bsz) or (H, W)
     t = -(near + rays_o[...,2]) / rays_d[...,2]
     rays_o = rays_o + t[...,None] * rays_d
 
     # Store some intermediate homogeneous results
-    # both are (N_rays)
+    # both are (render_bsz)
     ox_oz = rays_o[...,0] / rays_o[...,2]
     oy_oz = rays_o[...,1] / rays_o[...,2]
     

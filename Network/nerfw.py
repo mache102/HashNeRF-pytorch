@@ -10,24 +10,33 @@ class NeRFW(nn.Module):
                  use_appearance: bool = False, 
                  use_transient: bool = False):
         """
-        https://github.com/kwea123/nerf_pl/blob/nerfw/models/nerf.py
+        Modified from https://github.com/kwea123/nerf_pl/blob/nerfw/models/nerf.py
 
-        ---Parameters for the original NeRF---
-        layers_sigma: number of layers for density (sigma) net
-        hdim: number of hidden units in each layer
-        skips: add skip connection in the Dth layer
-        input_ch_sigma: number of input channels for sigma (3+3*10*2=63 by default)
-        input_ch_color: number of input channels for colorection (3+3*4*2=27 by default)
-        input_ch_t: number of input channels for t
+        ---Parameters---
+        model_config: config for the model (coarse or fine)
+        input_chs: input channels (xyz, viewdirs, appearance, transient)
+        use_appearance: whether to use appearance encoding
+        use_transient: whether to use transient encoding
 
-        ---Parameters for NeRF-W (used in fine model only as per section 4.3)---
-        ---cf. Figure 3 of the paper---
-        encode_appearance: whether to add appearance encoding as input (NeRF-A)
-        input_ch_a: appearance embedding dimension. n^(a) in the paper
-        encode_transient: whether to add transient encoding as input (NeRF-U)
-        input_ch_t: transient embedding dimension. n^(tau) in the paper
-        beta_min: minimum pixel color variance
-
+        ---Model Config---    
+        "sigma": {
+            "layers": Number of layers for density (sigma) net
+            "hdim": Number of hidden units in each layer
+            "geo_feat_dim": Dimension of the geometry feature (to be concatenated with viewdirs)
+        },
+        "color": {
+            "layers": Number of layers for color net
+            "hdim": Number of hidden units in each layer
+        },
+        "appearance": {
+            "input_ch": Number of input channels for appearance
+        },
+        "transient": {
+            "input_ch": Number of input channels for transient
+            "layers": Number of layers for transient net
+            "hdim": Number of hidden units in each layer
+        },
+        "beta_min": Minimum pixel color variance
 
         do not encode transient for coarse model
         """

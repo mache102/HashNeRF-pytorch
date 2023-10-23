@@ -9,8 +9,7 @@ from tqdm import trange , tqdm
 
 from loss import sigma_sparsity_loss, total_variation_loss
 from data_classes import StandardDataset
-from renderer import VolumetricRenderer
-from renderer_util import prepare_rays
+from renderer import *
 from ray_util import * 
 from util import *
 from math_util import to_8b, img2mse, mse2psnr, psnr

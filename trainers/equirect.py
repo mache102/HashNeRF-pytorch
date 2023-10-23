@@ -7,8 +7,7 @@ import imageio
 from tqdm import trange, tqdm 
 
 from data_classes import EquirectDataset
-from renderer import VolumetricRenderer
-from renderer_util import prepare_rays
+from renderer import *
 from ray_util import * 
 from util import *
 

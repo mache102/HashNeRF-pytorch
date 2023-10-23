@@ -1,5 +1,5 @@
 from torch.optim import Adam
-from radam import RAdam 
+from .radam import RAdam 
 
 def get_optimizer(otyp, grad_vars, args, em_xyz_params=None):
     if otyp == "radam":      

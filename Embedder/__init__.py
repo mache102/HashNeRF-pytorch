@@ -1,23 +1,29 @@
 import torch.nn as nn
 
-from Embedder.positional_encoding import PosEmbedder
-from Embedder.hash_encoding import HashEmbedder 
-from Embedder.spherical_harmonic import SHEncoder
+from .positional_encoding import PosEmbedder
+from .hash_encoding import HashEmbedder 
+from .spherical_harmonic import SHEncoder
 
 def get_embedders(embedder_config, dataset):
     embedder_names = ["xyz", "dir", "appearance", "transient"]
     embedders = {}
 
+    # note that some embedders may be trainable, i.e. the linear embeddings for appearance and transient
+    is_trainable = {} 
+
     for k in embedder_names:
         if embedder_config.get(k) is None:
             embedders[k] = None
+            is_trainable[k] = False
             print(f"{k.upper()} embedder: None")
             continue
 
-        embedders[k] = get_embedder(embedder_config[k], bbox=dataset.bbox)
+        embedders[k], is_trainable[k] = get_embedder(embedder_config[k], bbox=dataset.bbox)
         print(f"{k.upper()} embedder: {embedder_config[k]['name']}")
+        if is_trainable[k]: 
+            print("Embedder is trainable")
 
-    return embedders
+    return embedders, is_trainable
 
 def get_embedder(config, bbox=None):
     """
@@ -28,6 +34,8 @@ def get_embedder(config, bbox=None):
     """
     name = config["type"]
     config = config["config"]
+
+    is_trainable = False
 
     if name == "none":
         return nn.Identity(), 3
@@ -45,15 +53,20 @@ def get_embedder(config, bbox=None):
                             bounding_box=bbox)
     elif name == "sh":
         embedder = SHEncoder()
-    elif name == "torch":
-        embedder = torch_embedding(config["samples"], config["hdim"])
+    elif name == "linear": # linear embedding (is there a better name?)
+        embedder = TorchEmbedding(config["samples"], config["hdim"]) 
+        is_trainable = True 
     else:
         raise ValueError(f"Invalid embedding type {name}")
 
-    return embedder
+    return embedder, is_trainable
 
-def torch_embedding(samples, hdim):
-    """
-    For appearance or transient embedding
-    """
-    return nn.Embedding(samples, hdim) 
+class TorchEmbedding(nn.Embedding):
+    def __init__(self, num_embeddings, embedding_dim):
+        super(TorchEmbedding, self).__init__(num_embeddings, embedding_dim)
+
+    @property
+    def out_dim(self):
+        """name consistency with other embedding classes"""
+        return self.embedding_dim
+

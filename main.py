@@ -46,6 +46,8 @@ def main():
     """
     print("Load data")
     dataset = load_data(args)
+    print(np.array(dataset.rays_train).shape)
+    exit()
     """
     2. Experiment savepath, savename, etc.
     """
@@ -68,13 +70,19 @@ def main():
         embedder_config = json.load(f)
         print(f"Loaded embed config {args.embed_config}")
 
-    embedders = get_embedders(embedder_config, dataset)
+    # some embedders are trainable so we add them to a model dict in advance
+    models = {}
+    embedders, is_trainable = get_embedders(embedder_config, dataset)
     input_chs = {}
     for k in embedders:
         if embedders[k] is None:
             input_chs[k] = 0
             continue
         input_chs[k] = embedders[k].out_dim
+        if is_trainable[k]:
+            models[k] = embedders[k]
+            # remove from embedders dict
+            embedders[k] = None
 
     em_xyz_params = None
     if embedder_config["xyz"]["type"] == "hash":
@@ -92,7 +100,14 @@ def main():
     with open(fp, "r") as f:
         model_config = json.load(f)
         print(f"Loaded model config {args.model_config}")
-    models, grad_vars = get_networks(model_config, input_chs, args)
+    models_ = get_networks(model_config, input_chs, args)
+    models.update(models_)
+    
+    grad_vars = []
+    for k in models:
+        # move to device first
+        models[k] = models[k].to(device)
+        grad_vars += list(models[k].parameters())
     print("Models created")
 
     """
@@ -107,6 +122,7 @@ def main():
     """
     6. Load checkpoints if available
     """
+    # TODO: update this
     global_step = 0
     if args.ft_path is not None and args.ft_path!='None':
         ckpts = [args.ft_path]
@@ -130,7 +146,7 @@ def main():
         if models["fine"] is not None:
             models["fine"].load_state_dict(ckpt['fine_model_state_dict'])
         if args.em_xyz == "hash":
-            embedders["xyz"].load_state_dict(ckpt['pos_embedder_state_dict'])
+            embedders["xyz"].load_state_dict(ckpt['xyz_embedder_state_dict'])
 
     args.global_step = global_step
     """

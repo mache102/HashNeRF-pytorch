@@ -27,7 +27,7 @@ def config_parser():
                         help="number of iterations to train")
     parser.add_argument("--train_bsz", type=int, default=32*32*4,
                         help='train batch size (number of random rays per gradient step)')
-    parser.add_argument("--proc_bsz", type=int, default=1024*32,
+    parser.add_argument("--render_bsz", type=int, default=1024*32,
                         help='number of rays processed in parallel, decrease if running out of memory')
     parser.add_argument("--net_bsz", type=int, default=1024*64,
                         help='number of pts sent through network in parallel, decrease if running out of memory')

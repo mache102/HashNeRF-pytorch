@@ -1,8 +1,8 @@
 import torch 
 
-from Network.hash_nerf import HashNeRF
-from Network.vanilla_nerf import VanillaNeRF
-from Network.nerfw import NeRFW
+from .hash_nerf import HashNeRF
+from .vanilla_nerf import VanillaNeRF
+from .nerfw import NeRFW
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -14,7 +14,6 @@ def get_networks(model_config, input_chs, args):
         "coarse": None,
         "fine": None
     }
-    # grad_vars defined after coarse model
 
     use_fine = model_config.get("fine") is not None
     coarse_config = model_config["coarse"]
@@ -37,8 +36,6 @@ def get_networks(model_config, input_chs, args):
         models["coarse"] = HashNeRF(model_config["coarse"], 
                                     input_chs=input_chs)
         print("COARSE model: HashNeRF")
-    models["coarse"] = models["coarse"].to(device)
-    grad_vars = list(models["coarse"].parameters())
 
     # fine model
     if args.N_importance > 0:
@@ -58,9 +55,6 @@ def get_networks(model_config, input_chs, args):
                                use_transient=fine_config.get("transient") is not None)
             print("Fine model: VanillaNeRF")
 
-        models["fine"] = models["fine"].to(device)
-        grad_vars += list(models["fine"].parameters())
-
-    return models, grad_vars
+    return models
         
 

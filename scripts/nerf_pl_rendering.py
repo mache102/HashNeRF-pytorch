@@ -12,26 +12,26 @@ def sample_pdf(bins, weights, N_importance, det=False, eps=1e-5):
     """
     Sample @N_importance samples from @bins with distribution defined by @weights.
     Inputs:
-        bins: (N_rays, N_samples_+1) where N_samples_ is "the number of coarse samples per ray - 2"
-        weights: (N_rays, N_samples_)
+        bins: (render_bsz, N_samples_+1) where N_samples_ is "the number of coarse samples per ray - 2"
+        weights: (render_bsz, N_samples_)
         N_importance: the number of samples to draw from the distribution
         det: deterministic or not
         eps: a small number to prevent division by zero
     Outputs:
         samples: the sampled samples
     """
-    N_rays, N_samples_ = weights.shape
+    render_bsz, N_samples_ = weights.shape
     weights = weights + eps # prevent division by zero (don't do inplace op!)
-    pdf = weights / reduce(weights, 'n1 n2 -> n1 1', 'sum') # (N_rays, N_samples_)
-    cdf = torch.cumsum(pdf, -1) # (N_rays, N_samples), cumulative distribution function
-    cdf = torch.cat([torch.zeros_like(cdf[: ,:1]), cdf], -1)  # (N_rays, N_samples_+1) 
+    pdf = weights / reduce(weights, 'n1 n2 -> n1 1', 'sum') # (render_bsz, N_samples_)
+    cdf = torch.cumsum(pdf, -1) # (render_bsz, N_samples), cumulative distribution function
+    cdf = torch.cat([torch.zeros_like(cdf[: ,:1]), cdf], -1)  # (render_bsz, N_samples_+1) 
                                                                # padded to 0~1 inclusive
 
     if det:
         u = torch.linspace(0, 1, N_importance, device=bins.device)
-        u = u.expand(N_rays, N_importance)
+        u = u.expand(render_bsz, N_importance)
     else:
-        u = torch.rand(N_rays, N_importance, device=bins.device)
+        u = torch.rand(render_bsz, N_importance, device=bins.device)
     u = u.contiguous()
 
     inds = torch.searchsorted(cdf, u, right=True)
@@ -69,8 +69,8 @@ def render_rays(models,
     Inputs:
         models: dict of NeRF models (coarse and fine) defined in nerf.py
         embeddings: dict of embedding models of origin and direction defined in nerf.py
-        rays: (N_rays, 3+3), ray origins and directions
-        ts: (N_rays), ray time as embedding index
+        rays: (render_bsz, 3+3), ray origins and directions
+        ts: (render_bsz), ray time as embedding index
         N_samples: number of coarse samples per ray
         use_disp: whether to sample in disparity space (inverse depth)
         perturb: factor to perturb the sampling position on the ray (for coarse model only)
@@ -90,11 +90,11 @@ def render_rays(models,
         Inputs:
             results: a dict storing all results
             model: NeRF model (coarse or fine)
-            xyz: (N_rays, N_samples_, 3) sampled positions
+            xyz: (render_bsz, N_samples_, 3) sampled positions
                   N_samples_ is the number of sampled points on each ray;
                              = N_samples for coarse model
                              = N_samples+N_importance for fine model
-            z_vals: (N_rays, N_samples_) depths of the sampled positions
+            z_vals: (render_bsz, N_samples_) depths of the sampled positions
             test_time: test time or not
         """
         typ = model.typ
@@ -109,7 +109,7 @@ def render_rays(models,
                 xyz_embedded = embedding_xyz(xyz_[i:i+chunk])
                 out_chunks += [model(xyz_embedded, sigma_only=True)]
             out = torch.cat(out_chunks, 0)
-            static_sigmas = rearrange(out, '(n1 n2) 1 -> n1 n2', n1=N_rays, n2=N_samples_)
+            static_sigmas = rearrange(out, '(n1 n2) 1 -> n1 n2', n1=render_bsz, n2=N_samples_)
         else: # infer rgb and sigma and others
             dir_embedded_ = repeat(dir_embedded, 'n1 c -> (n1 n2) c', n2=N_samples_)
             # create other necessary inputs
@@ -128,18 +128,18 @@ def render_rays(models,
                 out_chunks += [model(torch.cat(inputs, 1), output_transient=output_transient)]
 
             out = torch.cat(out_chunks, 0)
-            out = rearrange(out, '(n1 n2) c -> n1 n2 c', n1=N_rays, n2=N_samples_)
-            static_rgbs = out[..., :3] # (N_rays, N_samples_, 3)
-            static_sigmas = out[..., 3] # (N_rays, N_samples_)
+            out = rearrange(out, '(n1 n2) c -> n1 n2 c', n1=render_bsz, n2=N_samples_)
+            static_rgbs = out[..., :3] # (render_bsz, N_samples_, 3)
+            static_sigmas = out[..., 3] # (render_bsz, N_samples_)
             if output_transient:
                 transient_rgbs = out[..., 4:7]
                 transient_sigmas = out[..., 7]
                 transient_betas = out[..., 8]
 
         # Convert these values using volume rendering
-        deltas = z_vals[:, 1:] - z_vals[:, :-1] # (N_rays, N_samples_-1)
-        delta_inf = 1e2 * torch.ones_like(deltas[:, :1]) # (N_rays, 1) the last delta is infinity
-        deltas = torch.cat([deltas, delta_inf], -1)  # (N_rays, N_samples_)
+        deltas = z_vals[:, 1:] - z_vals[:, :-1] # (render_bsz, N_samples_-1)
+        delta_inf = 1e2 * torch.ones_like(deltas[:, :1]) # (render_bsz, 1) the last delta is infinity
+        deltas = torch.cat([deltas, delta_inf], -1)  # (render_bsz, N_samples_)
 
         if output_transient:
             static_alphas = 1-torch.exp(-deltas*static_sigmas)
@@ -226,9 +226,9 @@ def render_rays(models,
     embedding_xyz, embedding_dir = embeddings['xyz'], embeddings['dir']
 
     # Decompose the inputs
-    N_rays = rays.shape[0]
-    rays_o, rays_d = rays[:, 0:3], rays[:, 3:6] # both (N_rays, 3)
-    near, far = rays[:, 6:7], rays[:, 7:8] # both (N_rays, 1)
+    render_bsz = rays.shape[0]
+    rays_o, rays_d = rays[:, 0:3], rays[:, 3:6] # both (render_bsz, 3)
+    near, far = rays[:, 6:7], rays[:, 7:8] # both (render_bsz, 1)
     # Embed direction
     dir_embedded = embedding_dir(kwargs.get('view_dir', rays_d))
 
@@ -242,10 +242,10 @@ def render_rays(models,
     else: # use linear sampling in disparity space
         z_vals = 1/(1/near * (1-z_steps) + 1/far * z_steps)
 
-    z_vals = z_vals.expand(N_rays, N_samples)
+    z_vals = z_vals.expand(render_bsz, N_samples)
     
     if perturb > 0: # perturb sampling depths (z_vals)
-        z_vals_mid = 0.5 * (z_vals[: ,:-1] + z_vals[: ,1:]) # (N_rays, N_samples-1) interval mid points
+        z_vals_mid = 0.5 * (z_vals[: ,:-1] + z_vals[: ,1:]) # (render_bsz, N_samples-1) interval mid points
         # get intervals between samples
         upper = torch.cat([z_vals_mid, z_vals[: ,-1:]], -1)
         lower = torch.cat([z_vals[: ,:1], z_vals_mid], -1)
@@ -260,7 +260,7 @@ def render_rays(models,
     inference(results, models['coarse'], xyz_coarse, z_vals, test_time, **kwargs)
 
     if N_importance > 0: # sample points for fine model
-        z_vals_mid = 0.5 * (z_vals[: ,:-1] + z_vals[: ,1:]) # (N_rays, N_samples-1) interval mid points
+        z_vals_mid = 0.5 * (z_vals[: ,:-1] + z_vals[: ,1:]) # (render_bsz, N_samples-1) interval mid points
         z_vals_ = sample_pdf(z_vals_mid, results['weights_coarse'][:, 1:-1].detach(),
                              N_importance, det=(perturb==0))
                   # detach so that grad doesn't propogate to weights_coarse from here
