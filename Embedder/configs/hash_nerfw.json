@@ -21,15 +21,13 @@
     "appearance": {
         "type": "linear",
         "config": {
-            "samples": 1000,
-            "hdim": 64
+            "hdim": 48
         }
     },
     "transient": {
         "type": "linear",
         "config": {
-            "samples": 1000,
-            "hdim": 64
+            "hdim": 16
         }
     }
 }

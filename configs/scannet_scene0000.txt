@@ -4,7 +4,6 @@ datadir = /work/yashsb/datasets/ScanNet/
 dataset_type = scannet
 
 use_batching = True
-use_viewdirs = True
 white_bkgd = False
 lr_decay = 500
 

@@ -3,7 +3,8 @@ from PIL import Image
 import os
 import math
 import cv2
-import glob
+
+from tqdm import trange 
 
 from dataclasses import dataclass, field
 from typing import Optional, List 
@@ -16,6 +17,7 @@ class EquirectRays:
     rgb: List[any] = field(default_factory=list)
     depth: List[any] = field(default_factory=list)
     gradient: Optional[List[any]] = None  # gradient (not present in the test set)
+    ts: Optional[List[any]] = None # idx embed
 
 def concat_all(batch):
     """
@@ -83,8 +85,8 @@ def load_equirect_data(baseDir: str, stage=0):
     image_coords = np.array(image_coords)
     # image_coords = np.concatenate([image_coords, np.array([0.0, 0.0, 0.0]).reshape(1,3)])
     
-    batch = EquirectRays()
-    batch.gradient = []
+    batch_train = EquirectRays()
+    batch_train.gradient = []
     batch_test = EquirectRays()
     if stage > 0:
         if stage == 1:
@@ -105,7 +107,8 @@ def load_equirect_data(baseDir: str, stage=0):
                 # images.append(rgb) 
 
     else:
-        for idx, c in enumerate(image_coords):
+        for idx in trange(len(image_coords)):
+            c = image_coords[idx]
             padded_idx = str(idx).zfill(3)
             dep = np.linalg.norm(coord - c, axis=-1)
 
@@ -117,29 +120,34 @@ def load_equirect_data(baseDir: str, stage=0):
                 # so we mask them out
                 mask = np.asarray(Image.open(os.path.join(baseDir, 'rm_occluded', f'mask_{padded_idx}.png'))).copy() / 255
 
-                batch.o.append(np.repeat(c.reshape(1, -1), (mask>0).sum(), axis=0))
-                batch.d.append(dir[mask>0])
-                batch.rgb.append(rgb[mask>0])
-                batch.depth.append(dep[mask>0])
-                batch.gradient.append(gradient[mask>0])
+                batch_train.o.append(np.repeat(c.reshape(1, -1), (mask>0).sum(), axis=0))
+                batch_train.d.append(dir[mask>0])
+                rgb_ = rgb[mask>0]
+                batch_train.rgb.append(rgb_) 
+                batch_train.depth.append(dep[mask>0])
+                batch_train.gradient.append(gradient[mask>0])
 
             elif idx < 110:
                 batch_test.o.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
                 batch_test.d.append(original_coord.reshape(-1, 3))
-                batch_test.rgb.append(np.asarray(Image.open(os.path.join(baseDir, 'test', f'rgb_{str(idx - 100).zfill(3)}.png'))).reshape(-1, 3))
+                rgb_ = np.asarray(Image.open(os.path.join(baseDir, 'test', f'rgb_{str(idx - 100).zfill(3)}.png'))).reshape(-1, 3)
+                batch_test.rgb.append(rgb_)
                 batch_test.depth.append(dep.reshape(-1))
 
             elif idx == 110:
                 batch_test.o.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
                 batch_test.d.append(coord.reshape(-1, 3))
-                batch_test.rgb.append(rgb.reshape(-1, 3))
+                rgb_ = rgb.reshape(-1, 3)
+                batch_test.rgb.append(rgb_)
                 batch_test.depth.append(dep.reshape(-1))
 
+            batch_train.ts.append(idx * np.ones(len(rgb_), 1))
+
     # use this function to reduce verbose code
-    batch = concat_all(batch)
+    batch_train = concat_all(batch_train)
     batch_test = concat_all(batch_test)
 
     # rays_o, rays_d, rays_g, rays_rgb, rays_depth, [H, W]
     # all in flatten format : [N(~H*W*100), 3 or 1]
     
-    return batch, batch_test, H, W
+    return batch_train, batch_test, H, W, len(image_coords)

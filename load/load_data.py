@@ -1,14 +1,53 @@
+import torch 
 import numpy as np
-import torch
+
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
 from load.load_llff import load_llff_data
 from load.load_deepvoxels import load_dv_data
 from load.load_blender import load_blender_data
 from load.load_scannet import load_scannet_data
 from load.load_LINEMOD import load_LINEMOD_data
-from load.load_equirect import load_equirect_data
+from load.load_equirect import load_equirect_data, EquirectRays
 
-from data_classes import CameraConfig, EquirectDataset, StandardDataset
+@dataclass
+class CameraConfig:
+    height: int
+    width: int
+    near: float
+    far: float
+    focal: Optional[float] = None
+    k: Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        if self.k is None and self.focal is not None:
+            self.k = np.array([
+                [self.focal, 0, 0.5 * self.width],
+                [0, self.focal, 0.5 * self.height],
+                [0, 0, 1]
+            ])
+
+@dataclass 
+class EquirectDataset:
+    cc: CameraConfig
+    rays_train: EquirectRays
+    rays_test: EquirectRays
+    bbox: Tuple[torch.Tensor, torch.Tensor] 
+    N_imgs: int
+
+@dataclass 
+class StandardDataset:
+    # TODO: specify types
+    cc: CameraConfig
+    images: any
+    poses: any
+    render_poses: any
+    bbox: any
+
+    train: any
+    val: any
+    test: any
 
 def load_data(args):
     """
@@ -32,7 +71,7 @@ def load_data(args):
         
     if args.dataset_type == 'equirect':
         print("Data type: Equirectangular")
-        rays, rays_test, h, w = load_equirect_data(args.datadir, args.stage)
+        rays, rays_test, h, w, images = load_equirect_data(args.datadir, args.stage)
         print(f"Loaded equirectangular; h: {h}, w: {w}")
 
         near, far = 0.0, 2.0
@@ -40,7 +79,8 @@ def load_data(args):
 
         cc = CameraConfig(height=h, width=w, near=near, far=far)
         dataset = EquirectDataset(cc=cc, rays_train=rays, 
-                                  rays_test=rays_test, bbox=bbox)
+                                  rays_test=rays_test, bbox=bbox,
+                                  N_imgs=images)
         
     elif args.dataset_type == 'llff':
         print("Data type: LLFF")

@@ -6,7 +6,7 @@ import imageio
 
 from tqdm import trange, tqdm 
 
-from data_classes import EquirectDataset
+from load.load_data import EquirectDataset
 from renderer import *
 from ray_util import * 
 from util import *
@@ -19,12 +19,16 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 class EquirectTrainer(BaseTrainer):
     def __init__(self, dataset: EquirectDataset, models: dict, 
                  optimizer: torch.optim.Optimizer,
-                 embedders: dict, args: argparse.Namespace):
+                 embedders: dict, model_config: dict,
+                 embedder_config: dict, args: argparse.Namespace):
 
         self.args = args
         self.models = models
         self.optimizer = optimizer
         self.embedders = embedders
+        self.model_config = model_config
+        self.embedder_config = embedder_config
+        self.use_viewdirs = embedder_config.get("viewdirs") is not None
 
         self.unpack_dataset(dataset)
         self.volren = VolumetricRenderer(cc=self.cc, models=models,
@@ -77,7 +81,7 @@ class EquirectTrainer(BaseTrainer):
             # optimize
             # (train_bsz, ?) and (train_bsz,)
             rays, og_shape = prepare_rays(self.cc, rays=[batch["o"], batch["d"]], 
-                                            ndc=False, use_viewdirs=self.args.use_viewdirs)
+                                            ndc=False, use_viewdirs=self.use_viewdirs)
             preds, extras = self.volren.render(rays=rays, og_shape=og_shape)
             loss, psnr, psnr_0 = self.calc_loss(preds, targets, extras)
             self.update_lr()
@@ -227,7 +231,7 @@ class EquirectTrainer(BaseTrainer):
             end = (idx + 1) * batch
             rays, og_shape = \
                 prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
-                             ndc=False, use_viewdirs=self.args.use_viewdirs)
+                             ndc=False, use_viewdirs=self.use_viewdirs)
             # print(rays.shape)
             preds, _ = \
                 self.volren.render(rays=rays, og_shape=og_shape)

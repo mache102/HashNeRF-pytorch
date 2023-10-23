@@ -8,7 +8,7 @@ import imageio
 from tqdm import trange , tqdm 
 
 from loss import sigma_sparsity_loss, total_variation_loss
-from data_classes import StandardDataset
+from load.load_data import StandardDataset
 from renderer import *
 from ray_util import * 
 from util import *
@@ -21,13 +21,16 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 class StandardTrainer(BaseTrainer):
     def __init__(self, dataset: StandardDataset, start,
                  models: dict, optimizer: torch.optim.Optimizer,
-                 embedders: dict,
+                 embedders: dict, model_config: dict, embedder_config: dict,
                  args: argparse.Namespace):
 
         self.args = args
         self.models = models
         self.optimizer = optimizer
         self.embedders = embedders
+        self.model_config = model_config
+        self.embedder_config = embedder_config
+        self.use_viewdirs = embedder_config.get("viewdirs") is not None
 
         self.unpack_dataset(dataset)
         self.volren = VolumetricRenderer(cc=self.cc, models=models,
@@ -97,7 +100,7 @@ class StandardTrainer(BaseTrainer):
             batch_rays, target_s = self.get_batch(iter)
             # optimizer
             rays, og_shape = prepare_rays(self.cc, rays=batch_rays, ndc=self.args.ndc,
-                                            use_viewdirs=self.args.use_viewdirs)
+                                            use_viewdirs=self.use_viewdirs)
             rgb, depth, accumulation, extras = \
                 self.volren.render(rays=rays, og_shape=og_shape,
                                    verbose=iter < 10, retraw=True)
@@ -301,7 +304,7 @@ class StandardTrainer(BaseTrainer):
             rgb, depth, _, _ = \
                 self.volren.render(*prepare_rays(cc=self.cc, 
                                                  c2w=c2w[:3,:4], 
-                                                 use_viewdirs=self.args.use_viewdirs))
+                                                 use_viewdirs=self.use_viewdirs))
             if idx == 0:
                 print(rgb.shape, depth.shape)
 

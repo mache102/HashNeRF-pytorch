@@ -6,7 +6,7 @@ from .nerfw import NeRFW
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def get_networks(model_config, input_chs, args):
+def get_networks(model_config, embedder_config, input_chs, args):
     """
     Initialize the coarse and fine networks.
     """
@@ -14,6 +14,7 @@ def get_networks(model_config, input_chs, args):
         "coarse": None,
         "fine": None
     }
+    use_viewdirs = embedder_config.get("viewdirs") is not None
 
     use_fine = model_config.get("fine") is not None
     coarse_config = model_config["coarse"]
@@ -28,7 +29,7 @@ def get_networks(model_config, input_chs, args):
             coarse_config["output_ch"] += 1
             fine_config["output_ch"] += 1
         models["coarse"] = VanillaNeRF(model_config["coarse"], input_chs=input_chs, 
-                                        use_viewdirs=args.use_viewdirs,
+                                        use_viewdirs=use_viewdirs,
                                         use_gradient=args.use_gradient)
         print("COARSE model: VanillaNeRF")
 
@@ -41,7 +42,7 @@ def get_networks(model_config, input_chs, args):
     if args.fine_samples > 0:
         if fine_type == "vanilla_nerf":
             models["fine"] = VanillaNeRF(model_config["fine"], input_chs=input_chs, 
-                                    use_viewdirs=args.use_viewdirs,
+                                    use_viewdirs=use_viewdirs,
                                     use_gradient=args.use_gradient)
             print("FINE model: VanillaNeRF")
         elif fine_type == "hash_nerf":

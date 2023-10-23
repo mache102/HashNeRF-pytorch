@@ -86,7 +86,6 @@ def main():
     if embedder_config["xyz"]["type"] == "hash":
         # hashed embedding table
         em_xyz_params = list(embedders["xyz"].parameters())
-    args.use_viewdirs = (embedder_config.get("viewdirs") is not None)
     print("Embedders created")
  
     """

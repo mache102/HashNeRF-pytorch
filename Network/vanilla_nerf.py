@@ -11,7 +11,7 @@ class VanillaNeRF(nn.Module):
         layers = model_config['layers']
         hdim = model_config['hdim']
         output_ch = model_config['output_ch']
-        skips = model_config['skips']
+        self.skips = model_config['skips']
         input_chs = input_chs
         
         self.use_viewdirs = use_viewdirs

@@ -28,6 +28,7 @@ class RayPredictions:
 class VolumetricRenderer:
     def __init__(self, cc: CameraConfig, 
                  models: dict, embedders: dict,
+                 model_config: dict, embedder_config: dict,
                  args: argparse.Namespace):
         """
         NeRF volumetric rendering
@@ -44,6 +45,10 @@ class VolumetricRenderer:
         """     
         self.models = models
         self.embedders = embedders
+        self.model_config = model_config 
+        self.embedder_config = embedder_config
+
+        self.use_viewdirs = embedder_config.get("viewdirs") is not None
 
         self.unpack_cc(cc)
         self.unpack_args(args)
@@ -80,7 +85,6 @@ class VolumetricRenderer:
         perturb: 0 for uniform sampling, 1 for jittered (stratified rand points) sampling
         coarse_samples: num of coarse samples per ray
         fine_samples: num of additional fine samples per ray
-        use_viewdirs: whether to use full 5D input (+dirs) instead of 3D
         white_bkgd: whether to assume white background
         raw_noise_std: std dev of noise added to regularize sigma_a output, 1e0 recommended
         lindisp: If True, sample linearly in inverse depth rather than in depth.
@@ -90,10 +94,9 @@ class VolumetricRenderer:
 
         self.render_bsz = args.render_bsz
         self.net_bsz = args.net_bsz
-        self.perturb = args.perturb
         self.coarse_samples = args.coarse_samples 
         self.fine_samples = args.fine_samples 
-        self.use_viewdirs = args.use_viewdirs
+        self.perturb = args.perturb
         self.white_bkgd = args.white_bkgd
         self.raw_noise_std = args.raw_noise_std 
         self.lindisp = args.lindisp
@@ -157,7 +160,7 @@ class VolumetricRenderer:
         xyz = rearrange(inputs["xyz"], 'r cs c -> (r cs) c') # (render_bsz * coarse_samples, 3)
         em_xyz, keep_mask = self.embedders["xyz"](xyz) #TODO: no keep mask for non hashenc
 
-        if self.args.use_viewdirs:
+        if self.use_viewdirs:
             dir = inputs["dir"]
             dir = rearrange(dir, 'r c -> r () c').expand(xyz_shape)
             dir = rearrange(dir, 'r cs c -> (r cs) c') # (render_bsz * coarse_samples, 3)
@@ -243,18 +246,18 @@ class VolumetricRenderer:
         weights = coarse_preds.weights
 
         if self.fine_samples > 0:
-            z_vals_mid = .5 * (z_vals[:,1:] + z_vals[:,:-1])
-            z_samples = self.sample_pdf(z_vals_mid, weights[...,1:-1], 
-                                det=(perturb==0.))
+            z_vals_mid = .5 * (z_vals[:,1:] + z_vals[:,:-1]) # (render_bsz, coarse_samples - 1)
+            z_samples = self.sample_pdf(z_vals_mid, weights[:,1:-1], 
+                                        perturb=perturb)
             z_samples = z_samples.detach()
 
             z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
 
             # concatenate positional samples
             # (render_bsz, coarse_samples + fine_samples, 3)
-            positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[:, :, None] 
+            xyz = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[:, :, None] 
             model_name = "fine" if self.models["fine"] is not None else "coarse"
-            raw = self.run_network(inputs={"xyz": positional, "dir": viewdirs},
+            raw = self.run_network(inputs={"xyz": xyz, "dir": dir},
                                    model=model_name)
 
             fine_preds = self.raw2outputs(raw, z_vals, rays_d, 
@@ -318,10 +321,15 @@ class VolumetricRenderer:
         if raw_noise_std > 0.: # sigma
             noise = torch.randn(density.shape) * raw_noise_std
 
+        # if output_transient:
+        #     static_alphas = 1-torch.exp(-deltas*static_sigmas)
+        #     transient_alphas = 1-torch.exp(-deltas*transient_sigmas)
+        #     alphas = 1-torch.exp(-deltas*(static_sigmas+transient_sigmas))
+
         alpha = alpha_composite(density + noise, dists) # (render_bsz, coarse_samples)
         ones = torch.ones((alpha.shape[0], 1)) # for the prod start with 1s
-        weights = alpha * torch.cumprod(torch.cat([ones, 1. - alpha + 1e-10], -1), -1)[:, :-1]
-        rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [render_bsz, 3]      
+        weights = alpha * torch.cumprod(torch.cat([ones, 1. - alpha + 1e-10], -1), -1)[:, :-1] 
+        rgb_map = torch.sum(weights[...,None] * rgb, -2)  # (render_bsz, 3)      
 
         depth_map = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
         disparity_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map)
@@ -342,40 +350,46 @@ class VolumetricRenderer:
                                 accumulation=accumulation_map, weights=weights,
                                 sparsity_loss=sparsity_loss)
 
-    def sample_pdf(self, bins, weights, det=False):
-        coarse_samples = self.fine_samples
+    def sample_pdf(self, bins, weights, perturb=0, eps=1e-5):
+        """
+        Sample a pdf
+
+        bins: (render_bsz, coarse_samples - 1)
+        weights: (render_bsz, coarse_samples - 2)
+        perturb: 0 for uniform sampling, 1 for jittered (stratified rand points) sampling
+
+        create a cdf from the weights obtained from the coarse model
+        """
+        fine_samples = self.fine_samples
         # Get pdf
-        weights = weights + 1e-5 # prevent nans
-        pdf = weights / torch.sum(weights, -1, keepdim=True)
+        weights = weights + eps # prevent nans
+        pdf = weights / reduce(weights, 'n1 n2 -> n1 1', 'sum')
         cdf = torch.cumsum(pdf, -1)
-        cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (batch, len(bins))
+        cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (render_bsz, coarse_samples-1)
 
         # Take uniform samples
-        if det:
-            u = torch.linspace(0., 1., steps=coarse_samples)
-            u = u.expand(list(cdf.shape[:-1]) + [coarse_samples])
+        if not perturb:
+            u = torch.linspace(0, 1, fine_samples)
+            u = u.expand((cdf.shape[0], fine_samples))
         else:
-            u = torch.rand(list(cdf.shape[:-1]) + [coarse_samples])
+            u = torch.rand((cdf.shape[0], fine_samples))
 
         # Invert CDF
         u = u.contiguous()
-        inds = torch.searchsorted(cdf, u, right=True)
-        below = torch.max(torch.zeros_like(inds-1), inds-1)
-        above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
-        inds_g = torch.stack([below, above], -1)  # (batch, coarse_samples, 2)
+        idxs = torch.searchsorted(cdf, u, right=True) # (render_bsz, fine_samples)
+        below = torch.clamp_min(idxs - 1, 0)
+        above = torch.clamp_max(idxs, cdf.shape[-1] - 1)
 
-        # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
-        # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
-        matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
-        cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
-        bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
+        # (render_bsz, fine_samples * 2)
+        idxs_sampled = rearrange(torch.stack([below, above], -1), 'n1 n2 c -> n1 (n2 c)', c=2) 
+        cdf_g = rearrange(torch.gather(cdf, 1, idxs_sampled), 'n1 (n2 c) -> n1 n2 c', c=2)
+        bins_g = rearrange(torch.gather(bins, 1, idxs_sampled), 'n1 (n2 c) -> n1 n2 c', c=2)
 
-        denom = (cdf_g[...,1]-cdf_g[...,0])
-        denom = torch.where(denom<1e-5, torch.ones_like(denom), denom)
-        t = (u-cdf_g[...,0])/denom
-        samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
-
-        return samples
+        denom = cdf_g[...,1] - cdf_g[...,0] # (render_bsz, fine_samples)
+        denom[denom < eps] = 1 # denom equals 0 means a bin has weight 0, in which case it will not be sampled
+                            # anyway, therefore any value for it is fine (set to 1 here)
+        samples = bins_g[...,0] + (u - cdf_g[...,0]) / denom * (bins_g[...,1] - bins_g[...,0])
+        return samples # (render_bsz, fine_samples)
 
 def prepare_rays(cc: CameraConfig, 
                 rays = None, c2w = None,

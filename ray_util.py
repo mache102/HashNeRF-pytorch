@@ -155,7 +155,7 @@ def get_ndc_rays(H, W, focal, near, rays_o, rays_d):
 
 
 if __name__ == '__main__':
-    from data_classes import CameraConfig
+    from load.load_data import CameraConfig
     from util import get_transform_matrix
 
     cc = CameraConfig(height=400, width=400, focal=1.0, near=0.2, far=0.6)
