@@ -75,9 +75,9 @@ class EquirectTrainer(BaseTrainer):
                 self.next_batch_idx = 0 # reset
 
             # optimize
-            rays, reshape_to = prepare_rays(self.cc, rays=[batch["o"], batch["d"]], 
+            rays, og_shape = prepare_rays(self.cc, rays=[batch["o"], batch["d"]], 
                                             ndc=False, use_viewdirs=self.args.use_viewdirs)
-            preds, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
+            preds, extras = self.volren.render(rays=rays, og_shape=og_shape)
             loss, psnr, psnr_0 = self.calc_loss(preds, targets, extras)
             self.update_lr()
             self.log_progress(iter)
@@ -90,11 +90,13 @@ class EquirectTrainer(BaseTrainer):
 
     def get_batch(self, start, step):
         end = start + step   
+        # both (train_bsz, 3)
         batch = {
             "o": self.rays_train.o[start:end],
             "d": self.rays_train.d[start:end]
         }
 
+        # all (train_bsz, 3)
         target = {
             "rgb_map": self.rays_train.rgb[start:end],
             "depth_map": self.rays_train.d[start:end], # d not depth?
@@ -222,12 +224,12 @@ class EquirectTrainer(BaseTrainer):
         for idx in trange(rays_o.shape[0] // batch):
             start = idx * batch
             end = (idx + 1) * batch
-            rays, reshape_to = \
+            rays, og_shape = \
                 prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
                              ndc=False, use_viewdirs=self.args.use_viewdirs)
             # print(rays.shape)
             preds, _ = \
-                self.volren.render(rays=rays, reshape_to=reshape_to)
+                self.volren.render(rays=rays, og_shape=og_shape)
             
             rgb, depth = preds["rgb_map"], preds["depth_map"]
             if idx == 0:

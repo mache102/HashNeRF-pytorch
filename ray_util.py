@@ -155,19 +155,28 @@ def get_ndc_rays(H, W, focal, near, rays_o, rays_d):
 
 
 if __name__ == '__main__':
+    from data_classes import CameraConfig
+    from util import get_transform_matrix
+
+    cc = CameraConfig(height=400, width=400, focal=1.0, near=0.2, far=0.6)
+    transform_matrix = torch.rand(3)
+    rotation_matrix = torch.rand(2)
+    c2w = get_transform_matrix(transform_matrix, rotation_matrix)
+    # get rays
+    rays_o, rays_d = get_rays(cc.height, cc.width, c2w, 
+             focal=cc.focal, K=cc.k)
+    # both (H, W, 3)
+    print(rays_o.shape, rays_d.shape)
+    
+    # rays_o = rays_o.reshape(-1, 3)
+    # rays_d = rays_d.reshape(-1, 3)
+    # get ndc rays
+    rays_o, rays_d = get_ndc_rays(cc.height, cc.width, focal=cc.k[0][0], 
+                                   near=1., rays_o=rays_o, rays_d=rays_d)
+    print(rays_o.shape, rays_d.shape)
+
+
     # test get_ray_directions
     H, W, focal = 400, 400, 1.0
     directions = get_directions(H, W, focal)
     print(directions.shape)
-
-    # plot rays 3d
-
-    import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d import Axes3D
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-
-    dots = directions.view(-1, 3).numpy()
-    ax.scatter(dots[:,0], dots[:,1], dots[:,2], c='r', marker='o')
-    plt.show()

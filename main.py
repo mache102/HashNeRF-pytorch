@@ -46,8 +46,8 @@ def main():
     """
     print("Load data")
     dataset = load_data(args)
-    print(np.array(dataset.rays_train).shape)
-    exit()
+    # o, d, rgb, gradient: (total_rays, 3)
+    # depth: (total_rays,)
     """
     2. Experiment savepath, savename, etc.
     """

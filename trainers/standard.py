@@ -96,10 +96,10 @@ class StandardTrainer(BaseTrainer):
             t1 = time.time()
             batch_rays, target_s = self.get_batch(iter)
             # optimizer
-            rays, reshape_to = prepare_rays(self.cc, rays=batch_rays, ndc=self.args.ndc,
+            rays, og_shape = prepare_rays(self.cc, rays=batch_rays, ndc=self.args.ndc,
                                             use_viewdirs=self.args.use_viewdirs)
             rgb, depth, accumulation, extras = \
-                self.volren.render(rays=rays, reshape_to=reshape_to,
+                self.volren.render(rays=rays, og_shape=og_shape,
                                    verbose=iter < 10, retraw=True)
             self.optimizer.zero_grad()
 

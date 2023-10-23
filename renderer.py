@@ -103,14 +103,14 @@ class VolumetricRenderer:
         if self.seed is not None:
             torch.manual_seed(self.seed)
 
-    def render(self, rays, reshape_to, **kwargs):
+    def render(self, rays, og_shape, **kwargs):
         """
         Rendering entry function
 
         Args:
         rays: array of shape [2, batch_size, 3]. Ray origin and direction for
             each example in batch.
-        reshape_to: shape to reshape outputs to.
+        og_shape: shape to reshape outputs to.
         
         Returns:
         rgb_map: [batch_size, 3]. Predicted RGB values for rays.
@@ -129,7 +129,7 @@ class VolumetricRenderer:
                 outputs[k].append(v)             
     
         outputs = {k: torch.cat(v, 0) for k, v in outputs.items()}
-        outputs = {k: torch.reshape(v, reshape_to + list(v.shape[1:])) for k, v in outputs.items()}
+        outputs = {k: torch.reshape(v, og_shape + list(v.shape[1:])) for k, v in outputs.items()}
         # for k in outputs: 
         #     try: 
         #         print(k, outputs[k].shape, outputs[k][:10])
@@ -380,15 +380,24 @@ def prepare_rays(cc: CameraConfig,
 
     returns:
         rays: (N, 8) or (N, 11) if use_viewdirs
-        reshape_to: shape of rays_d before flattening
+        og_shape: shape of rays_d before flattening: (train_bsz,) or (h, w)
     """
     if c2w is not None:
         # special case to render full image
+        # both (h, w, 3)
         rays_o, rays_d = get_rays(cc.height, cc.width, c2w, 
                                   focal=cc.focal, K=cc.k)
     else:
         # use provided ray batch
         rays_o, rays_d = rays
+
+    # we take note of the rays' shape 
+    # prior to flattening 
+    # for reshaping later
+    # (train_bsz,) or (h, w) 
+    og_shape = list(rays_d.shape[:-1])
+
+    # let us refer to h*w as train_bsz
 
     # use viewdirs (rays_d)
     if use_viewdirs:
@@ -399,31 +408,32 @@ def prepare_rays(cc: CameraConfig,
             rays_o, rays_d = get_rays(cc.height, cc.width, 
                                       c2w_staticcam, focal=cc.focal, K=cc.k)
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
-        viewdirs = viewdirs.reshape(-1,3).float()
+        viewdirs = rearrange(viewdirs, 'h w c -> (h w) c') # (train_bsz, 3)
 
-    # we take note of the rays' shape 
-    # prior to flattening 
-    # for reshaping later
-    # [..., 3]
-    reshape_to = list(rays_d.shape[:-1])
     # normalized device coordinates, for forward facing scenes
+    # shape unchanged
     if ndc:
         rays_o, rays_d = get_ndc_rays(cc.height, cc.width, focal=cc.k[0][0], 
                                         near=1., rays_o=rays_o, rays_d=rays_d)
 
     # Create ray batch
-    # (N, 3)
-    # rays_o = rearrange(rays_o, 'h w c -> (h w) c')
-    rays_o = rays_o.reshape(-1,3).float()
-    rays_d = rays_d.reshape(-1,3).float()
+    # (train_bsz, 3)
+    if len(rays_o.shape) == 3:
+        rays_o = rearrange(rays_o, 'h w c -> (h w) c')
+        rays_d = rearrange(rays_d, 'h w c -> (h w) c')  
 
-    near, far = cc.near * torch.ones_like(rays_d[...,:1]), cc.far * torch.ones_like(rays_d[...,:1])
+    # (train_bsz, 1)
+    bounds_shape = (rays_d.shape[0], 1)
+    near = torch.full(bounds_shape, cc.near)
+    far = torch.full(bounds_shape, cc.far)
+
+    # (train_bsz, 3 + 3 + 1 + 1) (+3 if use_viewdirs)
     rays = torch.cat([rays_o, rays_d, near, far], -1)
     if use_viewdirs:
         rays = torch.cat([rays, viewdirs], -1)
 
-    # [train_bsz, 3 + 3 + 1 + 1 (+ 3)]
-    return rays, reshape_to
+    # (train_bsz, ?) and ((train_bsz,) or (h, w))
+    return rays, og_shape
 
 if __name__ == '__main__':
     """
