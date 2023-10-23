@@ -57,4 +57,16 @@ def get_networks(model_config, input_chs, args):
 
     return models
         
+if __name__ == '__main__':
+    from settings import NET_CONFIG_PATH
+    import json
+    import os 
 
+    fp = os.path.join(NET_CONFIG_PATH, f"hash_nerf.json")
+    if not os.path.isfile(fp):
+        raise ValueError(f"Model configuration not found: {fp}")
+    with open(fp, "r") as f:
+        model_config = json.load(f)
+    models_ = get_networks(model_config, input_chs, args)
+    models.update(models_)
+    

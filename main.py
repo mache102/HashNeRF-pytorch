@@ -16,10 +16,8 @@ from parse_args import config_parser
 
 from trainers.equirect import EquirectTrainer 
 from trainers.standard import StandardTrainer
-
+from settings import NET_CONFIG_PATH, EMBED_CONFIG_PATH
 # 20231010 15:25
-NET_CONFIG_PATH = "Network/configs/"
-EMBED_CONFIG_PATH = "Embedder/configs/"
   
 def main():
     """

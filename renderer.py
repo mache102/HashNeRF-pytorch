@@ -13,6 +13,7 @@ from einops import rearrange, reduce
 from ray_util import *
 from load.load_data import CameraConfig
 from Optimizer.radam import RAdam
+from math_util import alpha_composite
 
 
 @dataclass 
@@ -154,7 +155,7 @@ class VolumetricRenderer:
         """
         xyz_shape = inputs["xyz"].shape
         xyz = rearrange(inputs["xyz"], 'r cs c -> (r cs) c') # (render_bsz * coarse_samples, 3)
-        em_xyz, keep_mask = self.embedders["xyz"](xyz)
+        em_xyz, keep_mask = self.embedders["xyz"](xyz) #TODO: no keep mask for non hashenc
 
         if self.args.use_viewdirs:
             dir = inputs["dir"]
@@ -170,8 +171,10 @@ class VolumetricRenderer:
         for i in range(0, embeds.shape[0], self.net_bsz):
             outputs.append(self.models[model](embeds[i:i + self.net_bsz]))
 
+        # (net_bsz, ?)
         outputs = torch.cat(outputs, 0)
         outputs[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
+        # (render_bsz, coarse_samples, ?)
         outputs = torch.reshape(outputs, list(xyz_shape[:-1]) + [outputs.shape[-1]])
         return outputs
     
@@ -185,14 +188,14 @@ class VolumetricRenderer:
         verbose: print more debugging info [unused].
 
         Returns:
-        rgb_map: [num_rays, 3]. Estimated RGB color of a ray. Comes from fine model.
-        disparity_map: [num_rays]. Disparity map. 1 / depth.
-        accumulation_map: [num_rays]. Accumulated opacity along each ray. Comes from fine model.
-        raw: [num_rays, num_samples, 4]. Raw predictions from model.
+        rgb_map: (render_bsz, 3). Estimated RGB color of a ray. Comes from fine model.
+        disparity_map: (render_bsz,). Disparity map. 1 / depth.
+        accumulation_map: (render_bsz,). Accumulated opacity along each ray. Comes from fine model.
+        raw: (render_bsz, coarse_samples, ?). Raw predictions from model.
         rgb0: See rgb_map. Output for coarse model.
         disp0: See disparity_map. Output for coarse model.
         acc0: See accumulation_map. Output for coarse model.
-        z_std: [num_rays]. Standard deviation of distances along ray for each sample.
+        z_std: (render_bsz,). Standard deviation of distances along ray for each sample.
         """
         if test is True:
             perturb = self.perturb_test
@@ -206,7 +209,7 @@ class VolumetricRenderer:
         rays_d = rays[:, 3:6] # (render_bsz, 3)
         near = rays[:, 6].unsqueeze(-1) # (render_bsz, 1)
         far = rays[:, 7].unsqueeze(-1) # (render_bsz, 1)
-        viewdirs = rays[:, 8:11] if rays.shape[-1] > 8 else None # (render_bsz, 3)
+        dir = rays[:, 8:11] if rays.shape[-1] > 8 else None # (render_bsz, 3)
 
         # prepare for sampling
         t_vals = torch.linspace(0., 1., steps=self.coarse_samples)
@@ -230,10 +233,10 @@ class VolumetricRenderer:
         # concatenate positional samples
         # (render_bsz, coarse_samples, 3)
         rearrange(rays_o, 'r c -> r () c')
-        positional = rearrange(rays_o, 'r c -> r () c') \
-                   + rearrange(rays_d, 'r c -> r () c') \
-                   * rearrange(z_vals, 'r cs -> r cs ()')
-        raw = self.run_network(inputs={"xyz": positional, "dir": viewdirs},
+        xyz = rearrange(rays_o, 'r c -> r () c') \
+            + rearrange(rays_d, 'r c -> r () c') \
+            * rearrange(z_vals, 'r cs -> r cs ()')
+        raw = self.run_network(inputs={"xyz": xyz, "dir": dir},
                                model="coarse")
         coarse_preds = self.raw2outputs(raw, z_vals, rays_d, 
                                         raw_noise_std=raw_noise_std)
@@ -248,7 +251,7 @@ class VolumetricRenderer:
             z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
 
             # concatenate positional samples
-            # [render_bsz, coarse_samples + fine_samples, 3]
+            # (render_bsz, coarse_samples + fine_samples, 3)
             positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[:, :, None] 
             model_name = "fine" if self.models["fine"] is not None else "coarse"
             raw = self.run_network(inputs={"xyz": positional, "dir": viewdirs},
@@ -286,39 +289,38 @@ class VolumetricRenderer:
     def raw2outputs(self, raw, z_vals, rays_d, raw_noise_std):
         """Transforms model's predictions to semantically meaningful values.
         Args:
-            raw: [num_rays, num_samples along ray, 4]. Prediction from model.
-            z_vals: [num_rays, num_samples along ray]. Integration time.
-            rays_d: [num_rays, 3]. Direction of each ray.
+            raw: (render_bsz, samples, ?). Prediction from model.
+            z_vals: (render_bsz, samples). Integration time.
+            rays_d: (render_bsz, 3). Direction of each ray.
         Returns:
-            rgb_map: [num_rays, 3]. Estimated RGB color of a ray.
-            disparity_map: [num_rays]. Disparity map. Inverse of depth map.
-            accumulation_map: [num_rays]. Sum of weights along each ray.
-            weights: [num_rays, num_samples]. Weights assigned to each sampled color.
-            depth_map: [num_rays]. Estimated distance to object.
+            rgb_map: (render_bsz, 3). Estimated RGB color of a ray.
+            disparity_map: (render_bsz,). Disparity map. Inverse of depth map.
+            accumulation_map: (render_bsz,). Sum of weights along each ray.
+            weights: (render_bsz, samples). Weights assigned to each sampled color.
+            depth_map: (render_bsz,). Estimated distance to object.
         
         Section 4, pg. 6. Volume Rendering with Radiance Fields
         C(r) = sum (i = 1 to N) T_i * (1-exp(sigma*dist))c_i
 
         volumetric rendering of a color c with density sigma. c(t) and sigma(t) are the color & density at point r(t)
         """
-        raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
+
 
         # differences of z vals = dists. last value is 1e10 (astronomically large in the context)
-        dists = z_vals[:,1:] - z_vals[:,:-1]
-        dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [render_bsz, coarse_samples]
-        dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
+        dists = z_vals[:, 1:] - z_vals[:, :-1]
+        dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[:,:1].shape)], -1)
+        dists = dists * torch.norm(rearrange(rays_d, 'r c -> r () c'), dim=-1) # (render_bsz, samples)
 
-        rgb = torch.sigmoid(raw[...,:3])  # [render_bsz, coarse_samples, 3]
+        rgb = torch.sigmoid(raw[...,:3]) # (render_bsz, samples, 3)
+        density = raw[...,3]
+        
         noise = 0.
         if raw_noise_std > 0.: # sigma
-            noise = torch.randn(raw[...,3].shape) * raw_noise_std
+            noise = torch.randn(density.shape) * raw_noise_std
 
-        # sigma_loss = sigma_sparsity_loss(raw[...,3])
-        alpha = raw2alpha(raw[...,3] + noise, dists)  # [render_bsz, coarse_samples]
-        # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
-
-        ones = torch.ones((alpha.shape[0], 1))
-        weights = alpha * torch.cumprod(torch.cat([ones, 1.-alpha + 1e-10], -1), -1)[:, :-1]
+        alpha = alpha_composite(density + noise, dists) # (render_bsz, coarse_samples)
+        ones = torch.ones((alpha.shape[0], 1)) # for the prod start with 1s
+        weights = alpha * torch.cumprod(torch.cat([ones, 1. - alpha + 1e-10], -1), -1)[:, :-1]
         rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [render_bsz, 3]      
 
         depth_map = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)

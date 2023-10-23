@@ -31,6 +31,13 @@ def mse2psnr(x):
     """
     return -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
 
+def alpha_composite(sigma, dists, fn=F.relu):
+    """
+    Calculation of alpha in nerf (pg 6, eq 3) 
+    a_i = 1 - exp(-sigma_i * delta_i)
+    """
+    return 1. - torch.exp(-fn(sigma) * dists)
+
 # def ssim(x, y):
 #     """
 #     Structural similarity index measure of two images

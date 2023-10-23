@@ -85,7 +85,7 @@ class HashEmbedder(nn.Module):
         """
         Embed an input point cloud x
         
-        x: (net_chunk, 3), 3D coordinates of samples
+        x: (net_bsz, 3), 3D coordinates of samples
         ^ we define a temporary class attr self.xyz to store x
         for use in get_voxel_vertices
 
@@ -116,7 +116,7 @@ def hash(coords, log2_hashmap_size):
 
     This function can process upto 7 dim coordinates
 
-    coords: (net_chunk, 8, dim)
+    coords: (net_bsz, 8, dim)
     """
 
     xor_result = torch.zeros_like(coords)[..., 0]
@@ -133,14 +133,14 @@ def trilinear_interp(x, min_vertex, max_vertex, embedds):
 
     Source: https://en.wikipedia.org/wiki/Trilinear_interpolation
 
-    x: (net_chunk, 3)
-    min_vertex: (net_chunk, 3)
-    max_vertex: (net_chunk, 3)
-    embedds: (net_chunk, 8, 2)
+    x: (net_bsz, 3)
+    min_vertex: (net_bsz, 3)
+    max_vertex: (net_bsz, 3)
+    embedds: (net_bsz, 8, 2)
     """
 
     # normalize to vertex coordinates
-    weights = (x - min_vertex) / (max_vertex - min_vertex) # (net_chunk, 3)
+    weights = (x - min_vertex) / (max_vertex - min_vertex) # (net_bsz, 3)
 
     # Step 1
     # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
