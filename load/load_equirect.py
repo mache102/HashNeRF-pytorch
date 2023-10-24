@@ -17,7 +17,7 @@ class EquirectRays:
     rgb: List[any] = field(default_factory=list)
     depth: List[any] = field(default_factory=list)
     gradient: Optional[List[any]] = None  # gradient (not present in the test set)
-    ts: Optional[List[any]] = None # idx embed
+    ts: List[any] = field(default_factory=list) # idx emebed
 
 def concat_all(batch):
     """
@@ -141,7 +141,11 @@ def load_equirect_data(baseDir: str, stage=0):
                 batch_test.rgb.append(rgb_)
                 batch_test.depth.append(dep.reshape(-1))
 
-            batch_train.ts.append(idx * np.ones(len(rgb_), 1))
+            ts = idx * np.ones((len(rgb_), 1))
+            if idx < 100:
+                batch_train.ts.append(ts)
+            else: 
+                batch_test.ts.append(ts)
 
     # use this function to reduce verbose code
     batch_train = concat_all(batch_train)

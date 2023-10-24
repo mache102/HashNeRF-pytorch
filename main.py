@@ -1,24 +1,17 @@
 import json 
 import os 
 import torch
+import pdb 
 
-from Optimizer.radam import RAdam
-from ray_util import *
 from load.load_data import load_data
-
 
 from Network import get_networks
 from Embedder import get_embedders
 from Optimizer import get_optimizer
-
-from Render import Render, BatchRender
-from Render.batch_render import BatchRender
-
 from util import *
 from parse_args import config_parser
 
-from trainers.trainer import EquirectTrainer 
-from trainers.standard import StandardTrainer
+from trainers.trainer import Trainer 
 from settings import NET_CONFIG_PATH, EMBED_CONFIG_PATH
 # 20231010 15:25
 
@@ -35,8 +28,6 @@ def main():
     """
     print("Load data")
     dataset = load_data(args)
-    # o, d, rgb, gradient: (total_rays, 3)
-    # depth: (total_rays,)
     """
     2. Experiment savepath, savename, etc.
     """
@@ -68,10 +59,10 @@ def main():
             input_chs[k] = 0
             continue
         input_chs[k] = embedders[k].out_dim
-        if is_trainable[k]:
-            models[k] = embedders[k]
-            # remove from embedders dict
-            embedders[k] = None
+        # if is_trainable[k]:
+        #     models[k] = embedders[k]
+        #     # remove from embedders dict
+        #     embedders[k] = None
 
     em_xyz_params = None
     if embedder_config["xyz"]["type"] == "hash":
@@ -90,7 +81,7 @@ def main():
         print(f"Loaded model config {args.model_config}")
 
     usage = {
-        "dirs": embedder_config.get("viewdirs") is not None,
+        "dir": embedder_config.get("dir") is not None,
         "depth": args.use_depth,
         "gradient": args.use_gradient,
         "fine": args.N_fine > 0
@@ -100,8 +91,8 @@ def main():
         usage["appearance"] = False
         usage["transient"] = False
     else:
-        usage["appearance"]: model_config["fine"].get("appearance") is not None
-        usage["transient"]: model_config["fine"].get("transient") is not None
+        usage["appearance"] =  model_config["fine"].get("appearance") is not None
+        usage["transient"] = model_config["fine"].get("transient") is not None
         
     models_ = get_networks(model_config, input_chs, usage, args)
     models.update(models_)
@@ -111,6 +102,10 @@ def main():
         # move to device first
         models[k] = models[k].to(device)
         grad_vars += list(models[k].parameters())
+    for k in embedders:
+        if is_trainable[k]:
+            embedders[k] = embedders[k].to(device)
+            grad_vars += list(embedders[k].parameters())
     print("Models created")
 
     """
@@ -155,21 +150,7 @@ def main():
     """
     7. Create trainer
     """
-    batch_render = BatchRender(cc=cc, models=models,
-                                embedders=embedders, 
-                                usage=usage, args=args,
-                                bbox=dataset.bbox)
-    ren = Render(bsz=args.render_bsz, 
-                batch_render=batch_render)
-
-    if args.dataset_type == "equirect":
-        print("Using equirect trainer")
-        tclass = EquirectTrainer 
-    else:
-        print("Using standard trainer")
-        tclass = StandardTrainer
-
-    trainer = tclass(dataset=dataset, models=models, 
+    trainer = Trainer(dataset=dataset, models=models, 
                      optimizer=optimizer, embedders=embedders, 
                      usage=usage, args=args)
 
@@ -212,4 +193,9 @@ if __name__ == '__main__':
     if args.seed is not None:
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
-    main()
+
+    try:
+        main()
+    except Exception as e:
+        print(e)
+        pdb.post_mortem()

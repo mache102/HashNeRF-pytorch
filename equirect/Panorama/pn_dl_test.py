@@ -73,8 +73,8 @@ if __name__ == "__main__":
     # Create a pstats.Stats object from the profiler
     stats = pstats.Stats(profiler)
     
-    # Print the top 100 cumulative lines
-    stats.strip_dirs().sort_stats("cumulative").print_stats(100)
+    # Print the top 100 opacityative lines
+    stats.strip_dirs().sort_stats("opacityative").print_stats(100)
 """
 z=1
 [4.5299530029296875e-06, 7.152557373046875e-07] 2.6226043701171875e-06

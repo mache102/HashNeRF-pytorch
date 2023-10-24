@@ -23,7 +23,7 @@ def sample_pdf(bins, weights, N_fine, det=False, eps=1e-5):
     render_bsz, N_coarse_ = weights.shape
     weights = weights + eps # prevent division by zero (don't do inplace op!)
     pdf = weights / reduce(weights, 'n1 n2 -> n1 1', 'sum') # (render_bsz, N_coarse_)
-    cdf = torch.cumsum(pdf, -1) # (render_bsz, N_coarse), cumulative distribution function
+    cdf = torch.cumsum(pdf, -1) # (render_bsz, N_coarse), opacityative distribution function
     cdf = torch.cat([torch.zeros_like(cdf[: ,:1]), cdf], -1)  # (render_bsz, N_coarse_+1) 
                                                                # padded to 0~1 inclusive
 

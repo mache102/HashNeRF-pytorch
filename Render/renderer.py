@@ -105,7 +105,7 @@ class VolumetricRenderer:
         Returns:
         rgb_map: [batch_size, 3]. Predicted RGB values for rays.
         disparity_map: [batch_size]. Disparity map. Inverse of depth.
-        accumulation_map: [batch_size]. Accumulated opacity (alpha) along a ray.
+        opacity_map: [batch_size]. Acopacityated opacity (alpha) along a ray.
         extras: dict with everything returned by render_batch().
         """
         total_rays = rays.shape[0]
@@ -170,11 +170,11 @@ class VolumetricRenderer:
         Returns:
         rgb_map: (render_bsz, 3). Estimated RGB color of a ray. Comes from fine model.
         disparity_map: (render_bsz,). Disparity map. 1 / depth.
-        accumulation_map: (render_bsz,). Accumulated opacity along each ray. Comes from fine model.
+        opacity_map: (render_bsz,). Acopacityated opacity along each ray. Comes from fine model.
         raw: (render_bsz, N_coarse, ?). Raw predictions from model.
         rgb0: See rgb_map. Output for coarse model.
         disp0: See disparity_map. Output for coarse model.
-        acc0: See accumulation_map. Output for coarse model.
+        acc0: See opacity_map. Output for coarse model.
         z_std: (render_bsz,). Standard deviation of distances along ray for each sample.
         """
         if test is True:
@@ -262,7 +262,7 @@ class VolumetricRenderer:
         Returns:
             rgb_map: (render_bsz, 3). Estimated RGB color of a ray.
             disparity_map: (render_bsz,). Disparity map. Inverse of depth map.
-            accumulation_map: (render_bsz,). Sum of weights along each ray.
+            opacity_map: (render_bsz,). Sum of weights along each ray.
             weights: (render_bsz, samples). Weights assigned to each sampled color.
             depth_map: (render_bsz,). Estimated distance to object.
         
@@ -296,11 +296,11 @@ class VolumetricRenderer:
 
         static_rgbs = torch.sigmoid(raw[...,:3]) # (render_bsz, samples, 3)
         static_rgbs = torch.sum(weights[...,None] * rgb, -2)  # (render_bsz, 3)  
-        accumulation = torch.sum(weights, -1)
+        opacity = torch.sum(weights, -1)
         if self.white_bkgd:
-            static_rgbs += (1. - accumulation[...,None])
+            static_rgbs += (1. - opacity[...,None])
         results["static_rgbs"] = static_rgbs    
-        results["accumulation"] = accumulation
+        results["opacity"] = opacity
 
         depth = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
         disparity = 1./torch.max(1e-10 * torch.ones_like(depth), depth)

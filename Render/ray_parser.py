@@ -19,19 +19,30 @@ def parse_rays(rays, samples, usage):
     xyz = rearrange(xyz, 'r cs c -> (r cs) c') # (render_bsz * N_coarse, 3)
 
     dir = None
-    if usage["dirs"]:
+    if usage["dir"]:
         dir = rays[:, 8:11]
         dir = rearrange(dir, 'r c -> r () c').expand(xyz_shape)
         dir = rearrange(dir, 'r cs c -> (r cs) c') # (render_bsz * N_coarse, 3)
 
+    # this will do for now
+    next_ = 11 if usage["dir"] else 8
+
     inputs = {
         "xyz": xyz,
         "dir": dir,
-        "appearance": rays["appearance"],
-        "transient": rays["transient"]
+        "appearance": rays[:, next_:next_ + 1] if usage["appearance"] else None,
+        "transient": rays[:, next_:next_ + 1] if usage["transient"] else None,
     }
 
     return inputs
+
+def post_process(inputs, raw, bbox):
+    mask = (inputs["xyz"] >= bbox[0]) & (inputs["xyz"] <= bbox[1])
+    mask = mask.all(dim=-1)
+    # (net_bsz, ?)
+    raw = torch.cat(raw, 0)
+    raw[~mask, 3] = 0 # set sigma to 0 for invalid points
+    return raw
 
 def prepare_rays(cc: CameraConfig, usage: dict,
                 rays = None, c2w = None,
@@ -56,7 +67,7 @@ def prepare_rays(cc: CameraConfig, usage: dict,
 
     # let us refer to h*w as train_bsz
 
-    if usage["dirs"]:
+    if usage["dir"]:
         # provide ray directions as input
         viewdirs = rays_d
         if c2w_staticcam is not None:
@@ -88,7 +99,7 @@ def prepare_rays(cc: CameraConfig, usage: dict,
     # +1 if appearance
     # +1 if transient
     rays = torch.cat([rays_o, rays_d, near, far], -1)
-    if usage["dirs"]:
+    if usage["dir"]:
         rays = torch.cat([rays, viewdirs], -1)
     if usage["appearance"]:
         appearance = rays["appearance"]
@@ -104,13 +115,3 @@ def prepare_rays(cc: CameraConfig, usage: dict,
 
     # (train_bsz, ?) and ((train_bsz,) or (h, w))
     return rays, og_shape
-
-def post_process(inputs, raw, bbox):
-    max_xyz = torch.max(inputs["xyz"], dim=-1).values
-    min_xyz = torch.min(inputs["xyz"], dim=-1).values
-    keep_mask = (max_xyz >= bbox[0]) & (min_xyz <= bbox[1])
-    keep_mask = keep_mask.all(dim=-1)
-    # (net_bsz, ?)
-    raw = torch.cat(raw, 0)
-    raw[~keep_mask, 3] = 0 # set sigma to 0 for invalid points
-    return raw

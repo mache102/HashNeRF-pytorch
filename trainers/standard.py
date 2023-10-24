@@ -101,7 +101,7 @@ class StandardTrainer(BaseTrainer):
             # optimizer
             rays, og_shape = prepare_rays(self.cc, rays=batch_rays, ndc=self.args.ndc,
                                             use_viewdirs=self.use_viewdirs)
-            rgb, depth, accumulation, extras = \
+            rgb, depth, opacity, extras = \
                 self.volren.render(rays=rays, og_shape=og_shape,
                                    verbose=iter < 10, retraw=True)
             self.optimizer.zero_grad()

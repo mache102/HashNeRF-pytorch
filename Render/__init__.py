@@ -8,7 +8,7 @@ from .sampling.coarse import sample
 from .sampling.fine import sample_pdf
 from .ray_parser import parse_rays, post_process
 from .embed import embed_all
-from .interpret.nerf import raw2outputs
+from .extract.nerf_transient import Extractor
 from ray_util import *
 from load.load_data import CameraConfig
 
@@ -48,22 +48,15 @@ class BatchRender:
         self.usage = usage
         self.bbox = bbox
         self.args = args
+        self.extract = Extractor(usage=usage, white_bkgd=self.args.white_bkgd,
+                                   raw_noise_std=(args.raw_noise_std, 0))
+        
+        self.net_bsz = args.net_bsz 
 
-        self.perturb_test = False 
-        self.raw_noise_std_test = 0
-
-        if self.seed is not None:
-            torch.manual_seed(self.args.seed)
-
-    def __call__(self, rays, verbose=False, 
-                 retraw=False, test_mode=False):
+    def __call__(self, rays, test_mode=False):
         render_bsz = rays.shape[0]
-        if test_mode is True:
-            perturb = self.perturb_test
-            raw_noise_std = self.raw_noise_std_test
-        else:
-            perturb = self.args.perturb
-            raw_noise_std = self.args.raw_noise_std
+        perturb = self.args.perturb if not test_mode else False
+
 
         near = rays[:, 6].unsqueeze(-1) # (render_bsz, 1)
         far = rays[:, 7].unsqueeze(-1) # (render_bsz, 1)
@@ -78,14 +71,13 @@ class BatchRender:
         coarse_raw = []
         for i in range(0, embedded.shape[0], self.net_bsz):
             coarse_raw.append(self.models["coarse"](embedded[i:i + self.net_bsz]))
-        coarse_raw = post_process(coarse_raw)
+        coarse_raw = post_process(inputs, coarse_raw, self.bbox)
         # (render_bsz, N_coarse, ?)
         coarse_raw = rearrange(coarse_raw, '(r cs) c -> r cs c', 
                                 r=render_bsz, cs=self.args.N_coarse)
 
-        coarse_out = raw2outputs(raw=coarse_raw, samples=coarse_samples, 
-                                rays_d=rays_d, white_bkgd=self.args.white_bkgd,
-                                raw_noise_std=raw_noise_std)
+        coarse_out = self.extract(raw=coarse_raw, samples=coarse_samples, 
+                                  rays_d=rays[:, 3:6])
 
         if self.N_fine > 0:
             weights = coarse_out.weights
@@ -100,14 +92,17 @@ class BatchRender:
             fine_raw = []
             for i in range(0, embedded.shape[0], self.net_bsz):
                 fine_raw.append(self.models[model_name](embedded[i:i + self.net_bsz]))
-            fine_raw = post_process(fine_raw)
+            
+            fine_raw = post_process(inputs, fine_raw, self.bbox)
             # (render_bsz, N_fine, ?)
             fine_raw = rearrange(fine_raw, '(r cs) c -> r cs c', 
                                 r=render_bsz, cs=self.args.N_fine)
 
-            fine_out = raw2outputs(raw=fine_raw, samples=fine_samples, 
-                                    rays_d=rays_d, white_bkgd=self.args.white_bkgd,
-                                    raw_noise_std=raw_noise_std)
+            fine_out = self.extract(raw=fine_raw, samples=fine_samples, 
+                                    rays_d=rays[:, 3:6])
+            # Add beta_min AFTER the beta composition. Different from eq 10~12 in the paper.
+            # See "Notes on differences with the paper" in README.
+            fine_out["beta"] += self.models[model_name].beta_min
 
         ret = {}
         for k in coarse_out:

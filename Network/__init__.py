@@ -46,7 +46,7 @@ def get_networks(model_config, input_chs, use, args):
         elif fine_type == "hash_nerf":
             models["fine"] = HashNeRF(model_config["fine"], 
                                   input_chs=input_chs)
-            print("FINe model: HashNeRF")
+            print("FINE model: HashNeRF")
             
         elif fine_type == "nerfw":
             models["fine"] = NeRFW(model_config["fine"], input_chs=input_chs,

@@ -77,7 +77,7 @@ class HashEmbedder(nn.Module):
         voxel_indices = bottom_left_idx.unsqueeze(1) + BOX_OFFSETS
         hashed_voxel_indices = hash(voxel_indices, self.log2_hashmap_size)
 
-        return voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices, keep_mask
+        return voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices # , keep_mask
 
     def forward(self, x):
         """
@@ -98,17 +98,17 @@ class HashEmbedder(nn.Module):
         for i in range(self.n_levels):
             resolution = torch.floor(self.base_resolution * self.b**i)
             voxel_min_vertex, voxel_max_vertex, \
-                hashed_voxel_indices, keep_mask = \
+                hashed_voxel_indices= \
                 self.get_voxel_vertices(resolution=resolution)
             
             voxel_embedds = self.embeddings[i](hashed_voxel_indices)
             x_embedded.append(trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds))
 
         # clip if some points are outside bounding box
-        keep_mask = self.xyz == torch.max(torch.min(self.xyz, box_max), box_min)
-        keep_mask = keep_mask.sum(dim=-1)==keep_mask.shape[-1]
+        # keep_mask = self.xyz == torch.max(torch.min(self.xyz, box_max), box_min)
+        # keep_mask = keep_mask.sum(dim=-1)==keep_mask.shape[-1]
         
-        return torch.cat(x_embedded, dim=-1), keep_mask
+        return torch.cat(x_embedded, dim=-1) #, keep_mask
 
 def hash(coords, log2_hashmap_size):
     """

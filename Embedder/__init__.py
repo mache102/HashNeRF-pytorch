@@ -19,7 +19,7 @@ def get_embedders(embedder_config, dataset):
             continue
 
         embedders[k], is_trainable[k] = get_embedder(embedder_config[k], bbox=dataset.bbox)
-        print(f"{k.upper()} embedder: {embedder_config[k]['name']}")
+        print(f"{k.upper()} embedder: {embedder_config[k]['type']}")
         if is_trainable[k]: 
             print("Embedder is trainable")
 

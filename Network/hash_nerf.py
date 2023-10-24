@@ -74,6 +74,5 @@ class HashNeRF(nn.Module):
         # color = torch.sigmoid(h)
         # h is color
         outputs = torch.cat([h, sigma.unsqueeze(dim=-1)], -1)
-        # (net_bsz, 3 + 1)
-
         return outputs
+        # (net_bsz, 3 + 1)

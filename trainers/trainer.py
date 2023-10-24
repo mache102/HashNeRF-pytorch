@@ -5,6 +5,7 @@ import numpy as np
 import imageio
 
 from tqdm import trange, tqdm 
+from Render import Render, BatchRender
 
 from load.load_data import EquirectDataset
 from Render.ray_parser import prepare_rays
@@ -17,14 +18,18 @@ from math_util import to_8b, img2mse, mse2psnr
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class Trainer:
-    def __init__(self, dataset: EquirectDataset, optimizer: torch.optim.Optimizer, 
+    def __init__(self, dataset: EquirectDataset, models: dict,
+                 optimizer: torch.optim.Optimizer, embedders: dict,
                  usage: dict, args: argparse.Namespace):
 
         self.args = args
+        self.embedders = embedders
+        self.models = models
         self.optimizer = optimizer
         self.usage = usage
 
         self.unpack_dataset(dataset)
+        self.cc = dataset.cc
 
         self.savepath = args.savepath
         self.train_bsz = args.train_bsz
@@ -48,6 +53,12 @@ class Trainer:
         self.near = torch.full((self.train_bsz, 1), self.cc.near)
         self.far = torch.full((self.train_bsz, 1), self.cc.far)
 
+        batch_render = BatchRender(cc=self.cc, models=models,
+                                    embedders=embedders, 
+                                    usage=usage, args=args,
+                                    bbox=dataset.bbox)
+        self.render = Render(bsz=args.render_bsz, 
+                             batch_render=batch_render)
 
     def unpack_dataset(self, dataset):
         """
@@ -77,9 +88,9 @@ class Trainer:
 
             # optimize
             # (train_bsz, ?) and (train_bsz,)
-            og_shape = list(rays["d"].shape[:-1])
+            og_shape = list(rays[:, 3].shape[:-1])
 
-            outputs = self.ren(rays=rays)
+            outputs = self.render(rays=rays)
             outputs = {k: torch.reshape(v, og_shape + list(v.shape[1:])) for k, v in outputs.items()}
             loss, psnr = self.calc_loss(outputs, targets)
             self.update_lr()
@@ -115,26 +126,22 @@ class Trainer:
                           self.rays_train.d[start:end],
                           self.near, self.far], -1)
 
-        if self.usage["dirs"]:
+        if self.usage["dir"]:
             # d is 3
-            dir = rays[3] / torch.norm(rays[3], dim=-1, keepdim=True)
-            rays = torch.cat([rays, dir], -1)
+            dir = rays[:, 3] / torch.norm(rays[:, 3], dim=-1, keepdim=True)
+            rays = torch.cat([rays, dir[:, None]], -1)
    
-            if self.usage["appearance"] or self.usage["transient"]: 
-                rays = torch.cat([rays, self.rays_train.t[start:end]], -1)
-
-        return rays
-    
+        if self.usage["appearance"] or self.usage["transient"]: 
+            rays = torch.cat([rays, self.rays_train.t[start:end]], -1)
 
         # all (train_bsz, 3)
         target = {
-            "rgb": self.rays_train.rgb[start:end],
+            "color": self.rays_train.rgb[start:end],
             "depth": self.rays_train.d[start:end], # d not depth?
-            "accumulation": self.rays_train.gradient[start:end]
         }
         return rays, target
 
-    def calc_loss(self, outputs, targets, extras):
+    def calc_loss(self, outputs, targets):
         """
         Calculates loss. 
         supposts color loss (coarse+fine)
@@ -142,41 +149,43 @@ class Trainer:
         """
         self.optimizer.zero_grad()
         
-        if self.args.nerfw_loss:
+        if self.usage["transient"]:
             loss_dict = {}
-            loss_dict['c_l'] = 0.5 * ((outputs['coarse_rgb'] - targets['rgb'])**2).mean()
-            if 'fine_rgb' in outputs:
+            loss_dict['c_l'] = 0.5 * ((outputs['coarse_color'] - targets['color'])**2).mean()
+            if 'fine_color' in outputs:
                 if 'beta' not in outputs: # no transient head, normal MSE loss
-                    loss_dict['f_l'] = 0.5 * ((outputs['fine_rgb'] - targets['rgb'])**2).mean()
+                    loss_dict['f_l'] = 0.5 * ((outputs['fine_color'] - targets['color'])**2).mean()
                 else:
                     loss_dict['f_l'] = \
-                        ((outputs['fine_rgb']-targets)**2/(2*outputs['beta'].unsqueeze(1)**2)).mean()
+                        ((outputs['fine_color'] - targets['color'])**2/(2*outputs['beta'].unsqueeze(1)**2)).mean()
                     loss_dict['b_l'] = 3 + torch.log(outputs['beta']).mean() # +3 to make it positive
-                    loss_dict['s_l'] = 0.01 * outputs['transient_sigmas'].mean()
+                    loss_dict['s_l'] = 0.01 * outputs['transient_sigma'].mean()
 
             loss = sum(l for l in loss_dict.values())
         else:
             # standard    
             prefix = 'fine' if self.args.N_fine > 0 else 'coarse'
-            rgb_loss = img2mse(outputs[f'{prefix}_rgb'] - targets['rgb'])
-            psnr = mse2psnr(rgb_loss)
-            loss = rgb_loss
+            color_loss = img2mse(outputs[f'{prefix}_color'] - targets['color'])
+            psnr = mse2psnr(color_loss)
+            loss = color_loss
 
             if self.usage["depth"]:
                 loss += torch.abs(outputs[f'{prefix}_depth'] - targets['depth']).mean()
             if self.usage["gradient"]:
-                loss += img2mse(outputs[f'{prefix}_accumulation'] - targets['accumulation'])
+                loss += img2mse(outputs[f'{prefix}_opacity'] - targets['opacity'])
 
             if self.args.N_fine > 0:
                 prefix = "fine"
-                loss += img2mse(outputs[f'{prefix}_rgb'] - targets['rgb'])
+                loss += img2mse(outputs[f'{prefix}_color'] - targets['color'])
                 if self.usage["depth"]:
                     loss += torch.abs(outputs[f'{prefix}_depth'] - targets['depth']).mean()
                 if self.usage["gradient"]:
-                    loss += img2mse(outputs[f'{prefix}_accumulation'] - targets['accumulation'])
+                    loss += img2mse(outputs[f'{prefix}_opacity'] - targets['opacity'])
 
         
-        sparsity_loss = self.args.sparse_loss_weight*(extras["sparsity_loss"].sum() + extras["sparsity_loss_0"].sum())
+        sparsity_loss = self.args.sparse_loss_weight \
+            * (outputs["coarse_sparsity_loss"].sum() \
+            + outputs.get("fine_sparsity_loss", torch.tensor(0)).sum())
         loss += sparsity_loss
 
         # add Total Variation loss
@@ -254,7 +263,7 @@ class Trainer:
             end = (idx + 1) * batch
             rays, og_shape = \
                 prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
-                             ndc=False, use_viewdirs=self.usage["dirs"])
+                             ndc=False, use_viewdirs=self.usage["dir"])
 
             outputs = self.volren.render(rays=rays)
             outputs = {k: torch.reshape(v, og_shape + list(v.shape[1:])) for k, v in outputs.items()}

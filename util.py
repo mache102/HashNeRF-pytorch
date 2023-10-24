@@ -66,12 +66,13 @@ def create_meshgrid_np(H, W, normalized_coordinates=True):
 
 
 def create_expname(args):
-    args.expname += f"_{args.em_xyz}XYZ"
-    args.expname += f"_{args.em_views}VIEW"
+    args.expname += "_nerfw_test"
+    # args.expname += f"_{args.em_xyz}XYZ"
+    # args.expname += f"_{args.em_views}VIEW"
     
-    args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
-    args.expname += "_lr"+str(args.lr) + "_decay"+str(args.lr_decay)
-    args.expname += "_RAdam"
+    # args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
+    # args.expname += "_lr"+str(args.lr) + "_decay"+str(args.lr_decay)
+    # args.expname += "_RAdam"
     if args.sparse_loss_weight > 0:
         args.expname += "_sparse" + str(args.sparse_loss_weight)
     args.expname += "_TV" + str(args.tv_loss_weight)
