@@ -37,6 +37,8 @@ def alpha_composite(sigma, dists, fn=F.relu):
     Calculation of alpha in nerf (pg 6, eq 3) 
     a_i = 1 - exp(-sigma_i * delta_i)
     """
+    if fn is None:
+        return 1. - torch.exp(-sigma * dists)
     return 1. - torch.exp(-fn(sigma) * dists)
 
 # def ssim(x, y):

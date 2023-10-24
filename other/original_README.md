@@ -29,8 +29,8 @@ To train for other objects like `ficus`/`hotdog`, replace `configs/chair.txt` wi
 
 ## Extras
 The code-base has additional support for:
-* Total Variation Loss for smoother embeddings (use `--tv-loss-weight` to enable)
-* Sparsity-inducing loss on the ray weights (use `--sparse-loss-weight` to enable)
+* Total Variation Loss for smoother embeddings (use `--tv_loss_weight` to enable)
+* Sparsity-inducing loss on the ray weights (use `--sparse_loss_weight` to enable)
 
 ## ScanNet dataset support
 The repo now supports training a NeRF model on a scene from the ScanNet dataset. I personally found setting up the ScanNet dataset to be a bit tricky. Please find some instructions/notes in [ScanNet.md](ScanNet.md).

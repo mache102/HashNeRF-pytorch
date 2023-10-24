@@ -62,8 +62,6 @@ class HashEmbedder(nn.Module):
         """
         box_min, box_max = self.bounding_box
 
-        # clip if some points are outside bounding box
-        keep_mask = self.xyz == torch.max(torch.min(self.xyz, box_max), box_min)
         if not torch.all(self.xyz <= box_max) or not torch.all(self.xyz >= box_min):
             # print("ALERT: some points are outside bounding box. Clipping them!")
             self.xyz = torch.clamp(self.xyz, min=box_min, max=box_max)
@@ -106,7 +104,10 @@ class HashEmbedder(nn.Module):
             voxel_embedds = self.embeddings[i](hashed_voxel_indices)
             x_embedded.append(trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds))
 
+        # clip if some points are outside bounding box
+        keep_mask = self.xyz == torch.max(torch.min(self.xyz, box_max), box_min)
         keep_mask = keep_mask.sum(dim=-1)==keep_mask.shape[-1]
+        
         return torch.cat(x_embedded, dim=-1), keep_mask
 
 def hash(coords, log2_hashmap_size):

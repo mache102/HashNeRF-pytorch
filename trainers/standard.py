@@ -9,7 +9,7 @@ from tqdm import trange , tqdm
 
 from loss import sigma_sparsity_loss, total_variation_loss
 from load.load_data import StandardDataset
-from renderer import *
+from Renderer.renderer import *
 from ray_util import * 
 from util import *
 from math_util import to_8b, img2mse, mse2psnr, psnr
@@ -204,7 +204,7 @@ class StandardTrainer(BaseTrainer):
         """
         SAVE CHECKPOINT
         """
-        if iter % self.args.i_weights == 0:
+        if iter % self.args.iter_ckpt == 0:
             path = os.path.join(self.savepath, '{:06d}.tar'.format(iter))
             if self.args.em_xyz == "hash":
                 torch.save({
@@ -226,7 +226,7 @@ class StandardTrainer(BaseTrainer):
         """
         RENDER VIDEO
         """
-        if iter % self.args.i_video == 0 and iter > 0:
+        if iter % self.args.iter_video == 0 and iter > 0:
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps = self.render_save(poses=self.render_poses)
@@ -238,14 +238,14 @@ class StandardTrainer(BaseTrainer):
         """
         RENDER TEST SET
         """
-        if iter % self.args.i_testset == 0 and iter > 0:
+        if iter % self.args.iter_test == 0 and iter > 0:
             test_fp = os.path.join(self.savepath, 'testset_{:06d}'.format(iter))
             self.eval_test(test_fp)
 
         """
         PRINT TRAINING PROGRESS
         """
-        if iter % self.args.i_print == 0:
+        if iter % self.args.iter_print == 0:
             tqdm.write(f"[TRAIN] Iter: {iter} Loss: {loss.item()}  PSNR: {psnr.item()}")
             self.loss_list.append(loss.item())
             self.psnr_list.append(psnr.item())

@@ -7,8 +7,8 @@ factor = 8
 llffhold = 8
 
 train_bsz = 1024
-coarse_samples = 64
-fine_samples = 64
+N_coarse = 64
+N_fine = 64
 
 raw_noise_std = 1e0
 

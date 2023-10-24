@@ -35,6 +35,8 @@ def config_parser():
                         help='learning rate')
     parser.add_argument("--lr_decay", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')
+    parser.add_argument("--decay_rate", type=float, default=0.1,
+                        help='lr decay rate')
 
     parser.add_argument("--use_batching", action='store_true',
                         help='only take random rays from 1 image at a time')
@@ -44,15 +46,14 @@ def config_parser():
                         help='specific weights npy file to reload for coarse network')
 
     # rendering options
-    parser.add_argument("--coarse_samples", type=int, default=64,
+    parser.add_argument("--N_coarse", type=int, default=64,
                         help='number of coarse samples per ray')
-    parser.add_argument("--fine_samples", type=int, default=0,
+    parser.add_argument("--N_fine", type=int, default=0,
                         help='number of additional fine samples per ray')
     parser.add_argument("--perturb", type=float, default=1.,
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--raw_noise_std", type=float, default=0.,
                         help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
-
     parser.add_argument("--render_only", action='store_true',
                         help='do not optimize, reload weights and render out render_poses path')
     parser.add_argument("--render_test", action='store_true',
@@ -61,6 +62,8 @@ def config_parser():
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
 
     # training options
+    parser.add_argument("--nerfw_loss", action='store_true',
+                        help='use nerfw loss instead of standard color loss')
     parser.add_argument("--precrop_iters", type=int, default=0,
                         help='number of steps to train on central crops')
     parser.add_argument("--precrop_frac", type=float,
@@ -109,22 +112,19 @@ def config_parser():
     parser.add_argument("--stage", type=int, default=0,
                         help='use iterative training by defining stage, if 0: don\'t use')
 
-
     # logging/saving options
-    parser.add_argument("--i_print",   type=int, default=100,
-                        help='frequency of console printout and metric loggin')
-    parser.add_argument("--i_img",     type=int, default=500,
-                        help='frequency of tensorboard image logging')
-    parser.add_argument("--i_weights", type=int, default=10000,
+    parser.add_argument("--iter_print",   type=int, default=100,
+                        help='frequency of console printout and metric logging')
+    parser.add_argument("--iter_ckpt", type=int, default=1000,
                         help='frequency of weight ckpt saving')
-    parser.add_argument("--i_testset", type=int, default=1000,
+    parser.add_argument("--iter_test", type=int, default=1000,
                         help='frequency of testset saving')
-    parser.add_argument("--i_video",   type=int, default=5000,
+    parser.add_argument("--iter_video",   type=int, default=5000,
                         help='frequency of render_poses video saving')
 
-    parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
+    parser.add_argument("--sparse_loss_weight", type=float, default=1e-10,
                         help='learning rate')
-    parser.add_argument("--tv-loss-weight", type=float, default=1e-6,
+    parser.add_argument("--tv_loss_weight", type=float, default=1e-6,
                         help='learning rate')
 
     return parser

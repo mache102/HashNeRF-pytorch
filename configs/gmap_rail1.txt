@@ -5,8 +5,8 @@ datadir = ./data/gmap_rail1
 dataset_type = equirect
 
 train_bsz = 1400
-coarse_samples = 64
-fine_samples = 128
+N_coarse = 64
+N_fine = 128
 
 raw_noise_std = 1e0
 

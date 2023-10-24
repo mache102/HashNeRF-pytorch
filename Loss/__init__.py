@@ -51,3 +51,6 @@ def total_variation_loss(embedder, level):
 def sigma_sparsity_loss(sigmas):
     # Using Cauchy Sparsity loss on sigma values
     return torch.log(1.0 + 2*sigmas**2).sum(dim=-1)
+
+def color_loss():
+    pass

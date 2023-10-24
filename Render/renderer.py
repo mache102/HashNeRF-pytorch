@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pdb
 
+from collections import defaultdict
 import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
@@ -15,21 +16,10 @@ from load.load_data import CameraConfig
 from Optimizer.radam import RAdam
 from math_util import alpha_composite
 
-
-@dataclass 
-class RayPredictions:
-    rgb: torch.Tensor
-    depth: torch.Tensor
-    disparity: torch.Tensor
-    accumulation: torch.Tensor
-    weights: torch.Tensor
-    sparsity_loss: torch.Tensor
-
 class VolumetricRenderer:
     def __init__(self, cc: CameraConfig, 
                  models: dict, embedders: dict,
-                 model_config: dict, embedder_config: dict,
-                 args: argparse.Namespace):
+                 use: dict, args: argparse.Namespace):
         """
         NeRF volumetric rendering
 
@@ -45,10 +35,7 @@ class VolumetricRenderer:
         """     
         self.models = models
         self.embedders = embedders
-        self.model_config = model_config 
-        self.embedder_config = embedder_config
-
-        self.use_viewdirs = embedder_config.get("viewdirs") is not None
+        self.use = use
 
         self.unpack_cc(cc)
         self.unpack_args(args)
@@ -83,8 +70,8 @@ class VolumetricRenderer:
         render_bsz: num of rays processed/rendered in parallel, adjust to prevent OOM
         net_bsz: num of rays sent to model in parallel (render_bsz % net_bsz == 0)
         perturb: 0 for uniform sampling, 1 for jittered (stratified rand points) sampling
-        coarse_samples: num of coarse samples per ray
-        fine_samples: num of additional fine samples per ray
+        N_coarse: num of coarse samples per ray
+        N_fine: num of additional fine samples per ray
         white_bkgd: whether to assume white background
         raw_noise_std: std dev of noise added to regularize sigma_a output, 1e0 recommended
         lindisp: If True, sample linearly in inverse depth rather than in depth.
@@ -94,8 +81,8 @@ class VolumetricRenderer:
 
         self.render_bsz = args.render_bsz
         self.net_bsz = args.net_bsz
-        self.coarse_samples = args.coarse_samples 
-        self.fine_samples = args.fine_samples 
+        self.N_coarse = args.N_coarse 
+        self.N_fine = args.N_fine 
         self.perturb = args.perturb
         self.white_bkgd = args.white_bkgd
         self.raw_noise_std = args.raw_noise_std 
@@ -107,7 +94,7 @@ class VolumetricRenderer:
         if self.seed is not None:
             torch.manual_seed(self.seed)
 
-    def render(self, rays, og_shape, **kwargs):
+    def render(self, rays, **kwargs):
         """
         Rendering entry function
 
@@ -123,52 +110,42 @@ class VolumetricRenderer:
         """
         total_rays = rays.shape[0]
 
-        outputs = {}
+        outputs = defaultdict(list)
         for i in range(0, total_rays, self.render_bsz):
             # (render_bsz, ?)
             batch_output = self.render_batch(rays[i:i + self.render_bsz], **kwargs)
             for k, v in batch_output.items():
-                if k not in outputs:
-                    outputs[k] = []
-                outputs[k].append(v)             
+                outputs[k] += [v]           
     
-        outputs = {k: torch.cat(v, 0) for k, v in outputs.items()}
-        outputs = {k: torch.reshape(v, og_shape + list(v.shape[1:])) for k, v in outputs.items()}
-        # for k in outputs: 
-        #     try: 
-        #         print(k, outputs[k].shape, outputs[k][:10])
-        #     except AttributeError:
-        #         continue
+        for k, v in outputs.items():
+            outputs[k] = torch.cat(v, 0) 
 
-        priority = ['rgb_map', 'depth_map', 'accumulation_map']
-
-        ret_main = {k: outputs[k] for k in priority}
-        ret_extra = {k: outputs[k] for k in outputs if k not in priority}
-        return ret_main, ret_extra
+        return outputs
 
     def run_network(self, inputs, model):
         """
         Prepare inputs (embed, concat) and apply network
 
         inputs
-            xyz: (render_bsz, coarse_samples, 3)
+            xyz: (render_bsz, N_coarse, 3)
             dir: (render_bsz, 3)
         
         model: coarse or fine
         """
         xyz_shape = inputs["xyz"].shape
-        xyz = rearrange(inputs["xyz"], 'r cs c -> (r cs) c') # (render_bsz * coarse_samples, 3)
+        xyz = rearrange(inputs["xyz"], 'r cs c -> (r cs) c') # (render_bsz * N_coarse, 3)
         em_xyz, keep_mask = self.embedders["xyz"](xyz) #TODO: no keep mask for non hashenc
+        embeds = em_xyz
 
-        if self.use_viewdirs:
+        if self.use["dirs"]:
             dir = inputs["dir"]
             dir = rearrange(dir, 'r c -> r () c').expand(xyz_shape)
-            dir = rearrange(dir, 'r cs c -> (r cs) c') # (render_bsz * coarse_samples, 3)
+            dir = rearrange(dir, 'r cs c -> (r cs) c') # (render_bsz * N_coarse, 3)
             em_dir = self.embedders["dir"](dir)
-
             embeds = torch.cat([em_xyz, em_dir], -1)
-        else:
-            embeds = em_xyz
+
+        if self.use["appearance"]:
+
 
         outputs = []
         for i in range(0, embeds.shape[0], self.net_bsz):
@@ -177,7 +154,7 @@ class VolumetricRenderer:
         # (net_bsz, ?)
         outputs = torch.cat(outputs, 0)
         outputs[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
-        # (render_bsz, coarse_samples, ?)
+        # (render_bsz, N_coarse, ?)
         outputs = torch.reshape(outputs, list(xyz_shape[:-1]) + [outputs.shape[-1]])
         return outputs
     
@@ -194,7 +171,7 @@ class VolumetricRenderer:
         rgb_map: (render_bsz, 3). Estimated RGB color of a ray. Comes from fine model.
         disparity_map: (render_bsz,). Disparity map. 1 / depth.
         accumulation_map: (render_bsz,). Accumulated opacity along each ray. Comes from fine model.
-        raw: (render_bsz, coarse_samples, ?). Raw predictions from model.
+        raw: (render_bsz, N_coarse, ?). Raw predictions from model.
         rgb0: See rgb_map. Output for coarse model.
         disp0: See disparity_map. Output for coarse model.
         acc0: See accumulation_map. Output for coarse model.
@@ -215,8 +192,8 @@ class VolumetricRenderer:
         dir = rays[:, 8:11] if rays.shape[-1] > 8 else None # (render_bsz, 3)
 
         # prepare for sampling
-        t_vals = torch.linspace(0., 1., steps=self.coarse_samples)
-        # (render_bsz, coarse_samples)
+        t_vals = torch.linspace(0., 1., steps=self.N_coarse)
+        # (render_bsz, N_coarse)
         if not self.lindisp:
             z_vals = near * (1. - t_vals) + far * (t_vals)
         else:
@@ -224,7 +201,7 @@ class VolumetricRenderer:
 
         if perturb > 0.:
             # get intervals between samples
-            # mid: (render_bsz, coarse_samples - 1)
+            # mid: (render_bsz, N_coarse - 1)
             # upper, lower: same as z_vals
             mids = .5 * (z_vals[:, 1:] + z_vals[:, :-1])
             upper = torch.cat([mids, z_vals[:, -1:]], -1)
@@ -234,7 +211,7 @@ class VolumetricRenderer:
             z_vals = lower + (upper - lower) * t_rand # same shape
 
         # concatenate positional samples
-        # (render_bsz, coarse_samples, 3)
+        # (render_bsz, N_coarse, 3)
         rearrange(rays_o, 'r c -> r () c')
         xyz = rearrange(rays_o, 'r c -> r () c') \
             + rearrange(rays_d, 'r c -> r () c') \
@@ -245,8 +222,8 @@ class VolumetricRenderer:
                                         raw_noise_std=raw_noise_std)
         weights = coarse_preds.weights
 
-        if self.fine_samples > 0:
-            z_vals_mid = .5 * (z_vals[:,1:] + z_vals[:,:-1]) # (render_bsz, coarse_samples - 1)
+        if self.N_fine > 0:
+            z_vals_mid = .5 * (z_vals[:,1:] + z_vals[:,:-1]) # (render_bsz, N_coarse - 1)
             z_samples = self.sample_pdf(z_vals_mid, weights[:,1:-1], 
                                         perturb=perturb)
             z_samples = z_samples.detach()
@@ -254,7 +231,7 @@ class VolumetricRenderer:
             z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
 
             # concatenate positional samples
-            # (render_bsz, coarse_samples + fine_samples, 3)
+            # (render_bsz, N_coarse + N_fine, 3)
             xyz = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[:, :, None] 
             model_name = "fine" if self.models["fine"] is not None else "coarse"
             raw = self.run_network(inputs={"xyz": xyz, "dir": dir},
@@ -263,29 +240,16 @@ class VolumetricRenderer:
             fine_preds = self.raw2outputs(raw, z_vals, rays_d, 
                                             raw_noise_std=raw_noise_std)
 
-        if self.fine_samples > 0:
-            ret = {
-                "rgb_map_0": coarse_preds.rgb,
-                "depth_map_0": coarse_preds.depth,
-                "accumulation_map_0": coarse_preds.accumulation,
-                "sparsity_loss_0": coarse_preds.sparsity_loss,     
-
-                "rgb_map": fine_preds.rgb,
-                "depth_map": fine_preds.depth,
-                "accumulation_map": fine_preds.accumulation,
-                "sparsity_loss": fine_preds.sparsity_loss,
-                "z_std": torch.std(z_samples, dim=-1, unbiased=False) # (render_bsz,)
-            }
-        else: 
-            ret = {
-                "rgb_map": coarse_preds.rgb,
-                "depth_map": coarse_preds.depth,
-                "accumulation_map": coarse_preds.accumulation,
-                "sparsity_loss": coarse_preds.sparsity_loss,
-            }
+        ret = {}
+        for k in coarse_preds:
+            ret[f"coarse_{k}"] = coarse_preds[k]
+        if self.N_fine > 0:
+            for k in fine_preds:
+                ret[f"fine_{k}"] = fine_preds[k]
+            ret["z_std"] = torch.std(z_samples, dim=-1, unbiased=False) # (render_bsz,)
         if retraw:
             ret['raw'] = raw
-    
+
         # debug_dict(ret)
         return ret
 
@@ -307,36 +271,43 @@ class VolumetricRenderer:
 
         volumetric rendering of a color c with density sigma. c(t) and sigma(t) are the color & density at point r(t)
         """
-
+        results = {}
 
         # differences of z vals = dists. last value is 1e10 (astronomically large in the context)
         dists = z_vals[:, 1:] - z_vals[:, :-1]
         dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[:,:1].shape)], -1)
         dists = dists * torch.norm(rearrange(rays_d, 'r c -> r () c'), dim=-1) # (render_bsz, samples)
 
-        rgb = torch.sigmoid(raw[...,:3]) # (render_bsz, samples, 3)
-        density = raw[...,3]
-        
-        noise = 0.
-        if raw_noise_std > 0.: # sigma
-            noise = torch.randn(density.shape) * raw_noise_std
+        static_sigmas = raw[...,3]    
+        if raw_noise_std > 0:
+            static_sigmas += torch.randn(static_sigmas.shape) * raw_noise_std
 
-        # if output_transient:
-        #     static_alphas = 1-torch.exp(-deltas*static_sigmas)
-        #     transient_alphas = 1-torch.exp(-deltas*transient_sigmas)
-        #     alphas = 1-torch.exp(-deltas*(static_sigmas+transient_sigmas))
+        static_alphas = alpha_composite(static_sigmas, dists) # (render_bsz, N_coarse)
+        if self.use["transient"]:
+            transient_rgbs = raw[..., 4:7]
+            transient_sigmas = raw[..., 7]
+            transient_betas = raw[..., 8]
 
-        alpha = alpha_composite(density + noise, dists) # (render_bsz, coarse_samples)
-        ones = torch.ones((alpha.shape[0], 1)) # for the prod start with 1s
-        weights = alpha * torch.cumprod(torch.cat([ones, 1. - alpha + 1e-10], -1), -1)[:, :-1] 
-        rgb_map = torch.sum(weights[...,None] * rgb, -2)  # (render_bsz, 3)      
+            transient_alphas = alpha_composite(transient_sigmas, dists) 
+            alphas = alpha_composite(static_sigmas + transient_sigmas, dists) 
 
-        depth_map = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
-        disparity_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map)
-        accumulation_map = torch.sum(weights, -1)
-        
+        ones = torch.ones((static_alphas.shape[0], 1)) # for the prod start with 1s
+        weights = static_alphas * torch.cumprod(torch.cat([ones, 1. - static_alphas + 1e-10], -1), -1)[:, :-1] 
+
+        static_rgbs = torch.sigmoid(raw[...,:3]) # (render_bsz, samples, 3)
+        static_rgbs = torch.sum(weights[...,None] * rgb, -2)  # (render_bsz, 3)  
+        accumulation = torch.sum(weights, -1)
         if self.white_bkgd:
-            rgb_map = rgb_map + (1. - accumulation_map[...,None])
+            static_rgbs += (1. - accumulation[...,None])
+        results["static_rgbs"] = static_rgbs    
+        results["accumulation"] = accumulation
+
+        depth = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
+        disparity = 1./torch.max(1e-10 * torch.ones_like(depth), depth)
+        results["depth"] = depth
+        results["disparity"] = disparity
+
+        results['transient_sigmas'] = transient_sigmas
 
         # Calculate weights sparsity loss
         try:
@@ -344,57 +315,55 @@ class VolumetricRenderer:
         except:
             print("Something occured in calculating weights sparsity loss. Begin debugging...")
             pdb.set_trace()
-        sparsity_loss = entropy
+        results["weights"] = weights
+        results["sparsity_loss"] = entropy 
 
-        return RayPredictions(rgb=rgb_map, depth=depth_map, disparity=disparity_map,
-                                accumulation=accumulation_map, weights=weights,
-                                sparsity_loss=sparsity_loss)
+        return results 
 
     def sample_pdf(self, bins, weights, perturb=0, eps=1e-5):
         """
         Sample a pdf
 
-        bins: (render_bsz, coarse_samples - 1)
-        weights: (render_bsz, coarse_samples - 2)
+        bins: (render_bsz, N_coarse - 1)
+        weights: (render_bsz, N_coarse - 2)
         perturb: 0 for uniform sampling, 1 for jittered (stratified rand points) sampling
 
         create a cdf from the weights obtained from the coarse model
         """
-        fine_samples = self.fine_samples
+        N_fine = self.N_fine
         # Get pdf
         weights = weights + eps # prevent nans
         pdf = weights / reduce(weights, 'n1 n2 -> n1 1', 'sum')
         cdf = torch.cumsum(pdf, -1)
-        cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (render_bsz, coarse_samples-1)
+        cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (render_bsz, N_coarse-1)
 
         # Take uniform samples
         if not perturb:
-            u = torch.linspace(0, 1, fine_samples)
-            u = u.expand((cdf.shape[0], fine_samples))
+            u = torch.linspace(0, 1, N_fine)
+            u = u.expand((cdf.shape[0], N_fine))
         else:
-            u = torch.rand((cdf.shape[0], fine_samples))
+            u = torch.rand((cdf.shape[0], N_fine))
 
         # Invert CDF
         u = u.contiguous()
-        idxs = torch.searchsorted(cdf, u, right=True) # (render_bsz, fine_samples)
+        idxs = torch.searchsorted(cdf, u, right=True) # (render_bsz, N_fine)
         below = torch.clamp_min(idxs - 1, 0)
         above = torch.clamp_max(idxs, cdf.shape[-1] - 1)
 
-        # (render_bsz, fine_samples * 2)
+        # (render_bsz, N_fine * 2)
         idxs_sampled = rearrange(torch.stack([below, above], -1), 'n1 n2 c -> n1 (n2 c)', c=2) 
         cdf_g = rearrange(torch.gather(cdf, 1, idxs_sampled), 'n1 (n2 c) -> n1 n2 c', c=2)
         bins_g = rearrange(torch.gather(bins, 1, idxs_sampled), 'n1 (n2 c) -> n1 n2 c', c=2)
 
-        denom = cdf_g[...,1] - cdf_g[...,0] # (render_bsz, fine_samples)
+        denom = cdf_g[...,1] - cdf_g[...,0] # (render_bsz, N_fine)
         denom[denom < eps] = 1 # denom equals 0 means a bin has weight 0, in which case it will not be sampled
                             # anyway, therefore any value for it is fine (set to 1 here)
         samples = bins_g[...,0] + (u - cdf_g[...,0]) / denom * (bins_g[...,1] - bins_g[...,0])
-        return samples # (render_bsz, fine_samples)
+        return samples # (render_bsz, N_fine)
 
-def prepare_rays(cc: CameraConfig, 
+def prepare_rays(cc: CameraConfig, use: dict,
                 rays = None, c2w = None,
-                c2w_staticcam = None, ndc: bool = False, 
-                use_viewdirs: bool = False):
+                c2w_staticcam = None, ndc: bool = False, ):
     """
     Prepare rays for rendering in batches
 
@@ -409,7 +378,7 @@ def prepare_rays(cc: CameraConfig,
                                   focal=cc.focal, K=cc.k)
     else:
         # use provided ray batch
-        rays_o, rays_d = rays
+        rays_o, rays_d = rays["o"], rays["d"]
 
     # we take note of the rays' shape 
     # prior to flattening 
@@ -419,8 +388,7 @@ def prepare_rays(cc: CameraConfig,
 
     # let us refer to h*w as train_bsz
 
-    # use viewdirs (rays_d)
-    if use_viewdirs:
+    if use["dirs"]:
         # provide ray directions as input
         viewdirs = rays_d
         if c2w_staticcam is not None:
@@ -449,8 +417,13 @@ def prepare_rays(cc: CameraConfig,
 
     # (train_bsz, 3 + 3 + 1 + 1) (+3 if use_viewdirs)
     rays = torch.cat([rays_o, rays_d, near, far], -1)
-    if use_viewdirs:
+    if use["dirs"]:
         rays = torch.cat([rays, viewdirs], -1)
+    if use["appearance"]:
+        appearance = rays["t"]
+        if len(appearance) == 3:
+            appearance = rearrange(appearance, 'h w c -> (h w) c')  
+        rays = torch.cat(rays[rays, appearance], -1)
 
     # (train_bsz, ?) and ((train_bsz,) or (h, w))
     return rays, og_shape
@@ -460,18 +433,18 @@ if __name__ == '__main__':
     testing purposes only
     """
     render_bsz = 4
-    coarse_samples = 101
+    N_coarse = 101
 
     n, f = 0.2, 0.6
-    t = np.linspace(0, 1, coarse_samples)
+    t = np.linspace(0, 1, N_coarse)
 
     z = 1 / ((1 - t) / n + t / f)
 
-    z = np.broadcast_to(z, (render_bsz, coarse_samples))
+    z = np.broadcast_to(z, (render_bsz, N_coarse))
 
     rays_d = np.random.rand(render_bsz, 3)
 
-    pts = rays_d[...,None,:] * z[...,:,None] # [render_bsz, coarse_samples, 3]
+    pts = rays_d[...,None,:] * z[...,:,None] # [render_bsz, N_coarse, 3]
 
     # plot all pts 
     fig = plt.figure()

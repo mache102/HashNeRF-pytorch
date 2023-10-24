@@ -11,30 +11,21 @@ from Network import get_networks
 from Embedder import get_embedders
 from Optimizer import get_optimizer
 
+from Render import Render, BatchRender
+from Render.batch_render import BatchRender
+
 from util import *
 from parse_args import config_parser
 
-from trainers.equirect import EquirectTrainer 
+from trainers.trainer import EquirectTrainer 
 from trainers.standard import StandardTrainer
 from settings import NET_CONFIG_PATH, EMBED_CONFIG_PATH
 # 20231010 15:25
-  
+
+
+
 def main():
-    """
-    Main NeRF pipeline    
-
-    1. Load dataset
-    2. Create experiment savepath, savename, etc.
-    3. Create embedding functions
-    4. Create coarse and fine models
-    5. Create optimizer
-    6. Load checkpoints if available
-    7. Create trainer
-    8a. Render/test/evaluate, no training
-    8b. Enter training loop
-    """
-
-    if args.fine_samples > 0:
+    if args.N_fine > 0:
         print("=== Using fine model ===")
     if args.render_only:
         print("=== Rendering only ===")
@@ -97,7 +88,22 @@ def main():
     with open(fp, "r") as f:
         model_config = json.load(f)
         print(f"Loaded model config {args.model_config}")
-    models_ = get_networks(model_config, input_chs, args)
+
+    usage = {
+        "dirs": embedder_config.get("viewdirs") is not None,
+        "depth": args.use_depth,
+        "gradient": args.use_gradient,
+        "fine": args.N_fine > 0
+    }
+
+    if not usage["fine"]:
+        usage["appearance"] = False
+        usage["transient"] = False
+    else:
+        usage["appearance"]: model_config["fine"].get("appearance") is not None
+        usage["transient"]: model_config["fine"].get("transient") is not None
+        
+    models_ = get_networks(model_config, input_chs, usage, args)
     models.update(models_)
     
     grad_vars = []
@@ -149,15 +155,23 @@ def main():
     """
     7. Create trainer
     """
+    batch_render = BatchRender(cc=cc, models=models,
+                                embedders=embedders, 
+                                usage=usage, args=args,
+                                bbox=dataset.bbox)
+    ren = Render(bsz=args.render_bsz, 
+                batch_render=batch_render)
+
     if args.dataset_type == "equirect":
         print("Using equirect trainer")
         tclass = EquirectTrainer 
     else:
         print("Using standard trainer")
         tclass = StandardTrainer
+
     trainer = tclass(dataset=dataset, models=models, 
                      optimizer=optimizer, embedders=embedders, 
-                     args=args)
+                     usage=usage, args=args)
 
     """
     8a. Render/test/evaluate, no training
