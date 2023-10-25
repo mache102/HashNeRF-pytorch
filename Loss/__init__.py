@@ -2,16 +2,15 @@
 
 from math import exp, log, floor
 import torch
-import torch.nn.functional as F
 import pdb
 
 from Embedder.hash_encoding import hash
 
 
 def total_variation_loss(embedder, level):
-    embeddings = embedder.embeddings
-    min_resolution = embedder.min_res 
-    max_resolution = embedder.max_res
+    embeddings = embedder.embeddings[level]
+    min_resolution = embedder.base_resolution
+    max_resolution = embedder.finest_resolution
     log2_hashmap_size = embedder.log2_hashmap_size
     n_levels = embedder.n_levels
 

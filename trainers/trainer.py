@@ -49,10 +49,6 @@ class Trainer:
         self.lr_decay = args.lr_decay
         self.decay_rate = args.decay_rate
 
-        # near and far bounds won't change during training
-        self.near = torch.full((self.train_bsz, 1), self.cc.near)
-        self.far = torch.full((self.train_bsz, 1), self.cc.far)
-
         batch_render = BatchRender(cc=self.cc, models=models,
                                     embedders=embedders, 
                                     usage=usage, args=args,
@@ -74,7 +70,8 @@ class Trainer:
         """
         print(f"Training iterations {self.start} to {self.end}")
 
-        for iter in trange(self.start, self.end):
+        for iteration in trange(self.start, self.end):
+            self.iteration = iteration
             # retrieve batch of data
             rays, targets = self.get_batch(start=self.next_batch_idx, 
                                             step=self.train_bsz)
@@ -88,32 +85,32 @@ class Trainer:
 
             # optimize
             # (train_bsz, ?) and (train_bsz,)
-            og_shape = list(rays[:, 3].shape[:-1])
+            # og_shape = list(rays[:, 3].shape[:-1])
 
             outputs = self.render(rays=rays)
-            outputs = {k: torch.reshape(v, og_shape + list(v.shape[1:])) for k, v in outputs.items()}
+            # outputs = {k: torch.reshape(v, og_shape + list(v.shape[1:])) for k, v in outputs.items()}
             loss, psnr = self.calc_loss(outputs, targets)
             self.update_lr()
 
             # Save state dicts for checkpoint
-            if iter % self.args.iter_ckpt == 0:
-                self.save_ckpt(iter)
+            if iteration % self.args.iter_ckpt == 0:
+                self.save_ckpt()
 
             # Evaluate and save test set
-            if iter % self.args.iter_test == 0 and iter > 0:
+            if iteration % self.args.iter_test == 0 and iteration > 0:
                 if self.args.stage > 0:
-                    test_fp = os.path.join(self.savepath, 'stage{}_test_{:06d}'.format(self.args.stage, iter))
+                    test_fp = os.path.join(self.savepath, 'stage{}_test_{:06d}'.format(self.args.stage, iteration))
                 else:
-                    test_fp = os.path.join(self.savepath, 'testset_{:06d}'.format(iter))
+                    test_fp = os.path.join(self.savepath, 'testset_{:06d}'.format(iteration))
 
                 self.eval_test(test_fp)
 
-            if iter % self.args.iter_print == 0:
-                tqdm.write(f"[TRAIN] Iter: {iter} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            if iteration % self.args.iter_print == 0:
+                tqdm.write(f"[TRAIN] Iter: {iteration} Loss: {loss.item()}  PSNR: {psnr.item()}")
 
             self.global_step += 1
 
-    def get_batch(self, start, step):
+    def get_batch(self, start, step, get_target=True):
         """
         Retrieve a batch of rays (self.train_bsz)
         for training 
@@ -124,7 +121,8 @@ class Trainer:
         # (train_bsz, 3+3+1+1)
         rays = torch.cat([self.rays_train.o[start:end], 
                           self.rays_train.d[start:end],
-                          self.near, self.far], -1)
+                          torch.full((step, 1), self.cc.near),
+                          torch.full((step, 1), self.cc.far)], -1)
 
         if self.usage["dir"]:
             # d is 3
@@ -134,6 +132,8 @@ class Trainer:
         if self.usage["appearance"] or self.usage["transient"]: 
             rays = torch.cat([rays, self.rays_train.t[start:end]], -1)
 
+        if not get_target:
+            return rays
         # all (train_bsz, 3)
         target = {
             "color": self.rays_train.rgb[start:end],
@@ -164,36 +164,35 @@ class Trainer:
             loss = sum(l for l in loss_dict.values())
         else:
             # standard    
-            prefix = 'fine' if self.args.N_fine > 0 else 'coarse'
-            color_loss = img2mse(outputs[f'{prefix}_color'] - targets['color'])
+            prefix = 'coarse' # 'fine' if self.args.N_fine > 0 else 'coarse'
+            color_loss = img2mse(outputs[f'{prefix}_color'], targets['color'])
             psnr = mse2psnr(color_loss)
             loss = color_loss
 
             if self.usage["depth"]:
                 loss += torch.abs(outputs[f'{prefix}_depth'] - targets['depth']).mean()
             if self.usage["gradient"]:
-                loss += img2mse(outputs[f'{prefix}_opacity'] - targets['opacity'])
+                loss += img2mse(outputs[f'{prefix}_gradient'], targets['gradient'])
 
             if self.args.N_fine > 0:
                 prefix = "fine"
-                loss += img2mse(outputs[f'{prefix}_color'] - targets['color'])
+                loss += img2mse(outputs[f'{prefix}_color'], targets['color'])
                 if self.usage["depth"]:
                     loss += torch.abs(outputs[f'{prefix}_depth'] - targets['depth']).mean()
                 if self.usage["gradient"]:
-                    loss += img2mse(outputs[f'{prefix}_opacity'] - targets['opacity'])
+                    loss += img2mse(outputs[f'{prefix}_gradient'], targets['gradient'])
 
-        
         sparsity_loss = self.args.sparse_loss_weight \
             * (outputs["coarse_sparsity_loss"].sum() \
             + outputs.get("fine_sparsity_loss", torch.tensor(0)).sum())
         loss += sparsity_loss
 
         # add Total Variation loss
-        if self.embedder_config["xyz"]["type"] == "hash":
+        if self.usage["tv_loss"]:
             em = self.embedders["xyz"]
             TV_loss = sum(total_variation_loss(em, i) for i in range(em.n_levels))
             loss += self.args.tv_loss_weight * TV_loss
-            if iter > 1000:
+            if self.iteration > 1000:
                 self.args.tv_loss_weight = 0.0
 
         loss.backward()
@@ -208,18 +207,23 @@ class Trainer:
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = new_lr
 
-    def save_ckpt(self, iter):
+    def save_ckpt(self):
         """Save checkpoint"""    
-        path = os.path.join(self.savepath, f'{iter:06d}.tar')
+        path = os.path.join(self.savepath, f'{self.iteration:06d}.tar')
 
-        ckpt_dict = {"global_step": self.global_step}
+        ckpt_dict = {
+            "global_step": self.global_step,
+            "model": {},
+            "embedder": {},
+        }
         # models
         for k, v in self.models.items():
+            if v is None: continue
             ckpt_dict["model"][k] = v.state_dict()
         # embedders (only if trainable)
         for k, v in self.embedders.items():
-            if any(p for p in v.parameters() if p.requires_grad):
-                ckpt_dict["embedder"][k] = v.state_dict()
+            if v is None: continue
+            ckpt_dict["embedder"][k] = v.state_dict()
         # optimizer
         ckpt_dict["optimizer"] = self.optimizer.state_dict()
         torch.save(ckpt_dict, path)
@@ -256,20 +260,17 @@ class Trainer:
         rgbs = []
         depths = []
 
-        h, w = self.cc.h, self.cc.w  
+        h, w = self.cc.height, self.cc.width  
         batch = h * w
         for idx in trange(rays_o.shape[0] // batch):
             start = idx * batch
-            end = (idx + 1) * batch
-            rays, og_shape = \
-                prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
-                             ndc=False, use_viewdirs=self.usage["dir"])
+            rays = self.get_batch(start, batch, get_target=False)
 
-            outputs = self.volren.render(rays=rays)
-            outputs = {k: torch.reshape(v, og_shape + list(v.shape[1:])) for k, v in outputs.items()}
+            outputs = self.render(rays=rays)
+            # outputs = {k: torch.reshape(v, og_shape + list(v.shape[1:])) for k, v in outputs.items()}
 
             prefix = "fine" if self.args.N_fine > 0 else "coarse"
-            rgb, depth = outputs[f"{prefix}_rgb"], outputs[f"{prefix}_depth"]
+            rgb, depth = outputs[f"{prefix}_color"], outputs[f"{prefix}_depth"]
             if idx == 0:
                 print(rgb.shape, depth.shape)
             rgb = rgb.reshape(h, w, 3).cpu().numpy()

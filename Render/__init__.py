@@ -51,6 +51,7 @@ class BatchRender:
         self.extract = Extractor(usage=usage, white_bkgd=self.args.white_bkgd,
                                    raw_noise_std=(args.raw_noise_std, 0))
         
+        self.N_fine = args.N_fine
         self.net_bsz = args.net_bsz 
 
     def __call__(self, rays, test_mode=False):
@@ -66,6 +67,10 @@ class BatchRender:
                          perturb=perturb)
         
         inputs = parse_rays(rays=rays, samples=coarse_samples, usage=self.usage)
+        for i in inputs: 
+                if inputs[i] is None:
+                    continue 
+                print(i,    inputs[i].shape)
         embedded = embed_all(inputs=inputs, embedders=self.embedders)
 
         coarse_raw = []
@@ -80,12 +85,17 @@ class BatchRender:
                                   rays_d=rays[:, 3:6])
 
         if self.N_fine > 0:
-            weights = coarse_out.weights
-            fine_samples = sample_pdf(N_fine=self.args.N_fine,
+            weights = coarse_out["weights"]
+            fine_samples = sample_pdf(N_fine=self.N_fine,
                                       z_vals=coarse_samples, 
-                                      weights=weights[:,1:-1],
+                                      weights=weights[:,1:],
                                       perturb=perturb)
+            print(fine_samples.shape)
             inputs = parse_rays(rays=rays, samples=fine_samples, usage=self.usage)
+            for i in inputs: 
+                if inputs[i] is None:
+                    continue 
+                print(i,    inputs[i].shape)
             embedded = embed_all(inputs=inputs, embedders=self.embedders)   
 
             model_name = "fine" if self.models["fine"] is not None else "coarse"
@@ -95,14 +105,21 @@ class BatchRender:
             
             fine_raw = post_process(inputs, fine_raw, self.bbox)
             # (render_bsz, N_fine, ?)
-            fine_raw = rearrange(fine_raw, '(r cs) c -> r cs c', 
-                                r=render_bsz, cs=self.args.N_fine)
-
+            # print(inputs["xyz"].shape[:-1])
+            # fine_raw = fine_raw.reshape(list(inputs["xyz"].shape[:-1]) + [fine_raw.shape[-1]])
+            # fine_raw = rearrange(fine_raw, '(r cs) c -> r cs c', 
+            #                     r=render_bsz, cs=self.N_fine)
+            # rearrange (r ?) c -> r ? c, where ? is inferred
+            s = fine_raw.shape[0] // render_bsz 
+            fine_raw = rearrange(fine_raw, '(r s) c -> r s c', 
+                                r=render_bsz, s=s)
+            # fine_raw = fine_raw.reshape(list(inputs["xyz"].shape[:-1]) + [fine_raw.shape[-1]])
             fine_out = self.extract(raw=fine_raw, samples=fine_samples, 
                                     rays_d=rays[:, 3:6])
             # Add beta_min AFTER the beta composition. Different from eq 10~12 in the paper.
             # See "Notes on differences with the paper" in README.
-            fine_out["beta"] += self.models[model_name].beta_min
+            if 'beta' in fine_out:
+                fine_out["beta"] += self.models[model_name].beta_min
 
         ret = {}
         for k in coarse_out:
@@ -112,6 +129,19 @@ class BatchRender:
                 ret[f"fine_{k}"] = fine_out[k]
         return ret
     
+    def embed_all(self, inputs):
+        """
+        Embed all the inputs.
+        """
+        embedded = torch.empty(0)  
+        for k, v in self.embedders.items():
+            if v is None:
+                continue
+            out = v(inputs[k])
+            embedded = torch.cat([embedded, out], -1)
+        return embedded
+
+
 class Render:
     def __init__(self, bsz: int, batch_render: BatchRender):
         self.bsz = bsz

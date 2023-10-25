@@ -82,6 +82,7 @@ def main():
 
     usage = {
         "dir": embedder_config.get("dir") is not None,
+        "tv_loss": embedder_config["xyz"]["type"] == "hash",
         "depth": args.use_depth,
         "gradient": args.use_gradient,
         "fine": args.N_fine > 0

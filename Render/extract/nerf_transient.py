@@ -65,15 +65,17 @@ class Extractor:
         def unpack(name):
             """Unpacks a return from the raw output"""
             start, step = self.unpack_lookup[name]
+            if step == 1:
+                return raw[..., start]
             return raw[..., start:start+step]
-        
+        raw_noise_std = self.raw_noise_std[0] if test_mode is False else self.raw_noise_std[1]  
         results = {}
 
         delta = self.get_delta(samples, rays_d) # (render_bsz, samples)
 
         static_sigma = unpack("static_sigma")   
-        if self.raw_noise_std > 0:
-            static_sigma += torch.randn(static_sigma.shape) * self.raw_noise_std
+        if raw_noise_std > 0:
+            static_sigma += torch.randn(static_sigma.shape) * raw_noise_std
         static_alpha = alpha_composite(static_sigma, delta) # (render_bsz, samples)
 
         if self.usage["transient"]:
@@ -104,9 +106,10 @@ class Extractor:
         results["color"] = static_color  
         results["opacity"] = opacity
         results["depth"] = depth
-        results["transient_sigma"] = transient_sigma
+        results["weights"] = weights
 
         if self.usage["transient"]:
+            results["transient_sigma"] = transient_sigma
             transient_weights = transient_alpha * dual_transmittance
 
             transient_color = \
