@@ -55,7 +55,7 @@ class HashNeRF(nn.Module):
     
     def forward(self, x):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
-        # (net_chunk, 3)
+        # (net_bsz, 3)
 
         # sigma
         h = input_pts
@@ -64,18 +64,18 @@ class HashNeRF(nn.Module):
 
         sigma, geo_feat = h[..., 0], h[..., 1:]
         # feed SH (geo_Feat) to color network
-        # (net_chunk, 1),
-        # (net_chunk, 15)
+        # (net_bsz, 1),
+        # (net_bsz, 15)
         
         # color
         h = torch.cat([input_views, geo_feat], dim=-1)
         for l in range(len(self.color_net)):
             h = self.color_net[l](h)
             
-        # (net_chunk, 3)
+        # (net_bsz, 3)
         # color = torch.sigmoid(h)
         # h is color
         outputs = torch.cat([h, sigma.unsqueeze(dim=-1)], -1)
-        # (net_chunk, 3 + 1)
+        # (net_bsz, 3 + 1)
 
         return outputs

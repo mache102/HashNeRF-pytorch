@@ -7,8 +7,8 @@ use_viewdirs = True
 white_bkgd = True
 lr_decay = 500
 
-N_samples = 64
-N_importance = 128
+coarse_samples = 64
+fine_samples = 128
 train_bsz = 1024
 
 precrop_iters = 500

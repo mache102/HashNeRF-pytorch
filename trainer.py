@@ -6,17 +6,14 @@ import imageio
 
 from tqdm import trange, tqdm 
 
-from data_classes import EquirectDataset
-from renderer import VolumetricRenderer
-from renderer_util import prepare_rays
+from load_data import EquirectDataset
+from renderer import VolumetricRenderer, prepare_rays
 from ray_util import * 
 from util import *
 
-from trainers.base import BaseTrainer 
-
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-class EquirectTrainer(BaseTrainer):
+class EquirectTrainer():
     def __init__(self, dataset: EquirectDataset, models: dict, 
                  optimizer: torch.optim.Optimizer,
                  embedders: dict, args: argparse.Namespace):

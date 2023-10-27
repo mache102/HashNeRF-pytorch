@@ -1,13 +1,12 @@
 import numpy as np
+import torch
 from PIL import Image
 import os
 import math
 import cv2
-import glob
 
 from dataclasses import dataclass, field
-from typing import Optional, List 
-
+from typing import Optional, List, Tuple
 
 @dataclass
 class EquirectRays:
@@ -16,6 +15,43 @@ class EquirectRays:
     rgb: List[any] = field(default_factory=list)
     depth: List[any] = field(default_factory=list)
     gradient: Optional[List[any]] = None  # gradient (not present in the test set)
+
+@dataclass
+class CameraConfig:
+    height: int
+    width: int
+    near: float
+    far: float
+    focal: Optional[float] = None
+    k: Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        if self.k is None:
+            self.k = np.array([
+                [self.focal, 0, 0.5 * self.width],
+                [0, self.focal, 0.5 * self.height],
+                [0, 0, 1]
+            ])
+
+@dataclass 
+class EquirectDataset:
+    cc: CameraConfig
+    rays_train: EquirectRays
+    rays_test: EquirectRays
+    bbox: Tuple[torch.Tensor, torch.Tensor] 
+
+@dataclass 
+class StandardDataset:
+    # TODO: specify types
+    cc: CameraConfig
+    images: any
+    poses: any
+    render_poses: any
+    bbox: any
+
+    train: any
+    val: any
+    test: any
 
 def concat_all(batch):
     """
@@ -143,3 +179,29 @@ def load_equirect_data(baseDir: str, stage=0):
     # all in flatten format : [N(~H*W*100), 3 or 1]
     
     return batch, batch_test, H, W
+
+
+def load(args):
+    """
+    images (samples, H, W, 4) # rgba
+    poses (samples, 4, 4) # frame transformation matrix 
+    render_poses (41, 4, 4) # full 360 poses 
+    hwf (3, ) # height, width, focal = .5 * W / np.tan(.5 * camera_angle_x) 
+    i_split (3, None) # imgs indices for train, val, test 
+    bounding_box (2, 3) # pair of 3d coords
+
+    """
+    print("Data type: Equirectangular")
+    rays, rays_test, h, w = load_equirect_data(args.datadir, args.stage)
+    print(f"Loaded equirectangular; h: {h}, w: {w}")
+
+    near, far = 0.0, 2.0
+    bbox = (torch.tensor([-1.5, -1.5, -1.0]), torch.tensor([1.5, 1.5, 1.0]))
+
+    cc = CameraConfig(height=h, width=w, near=near, far=far)
+    dataset = EquirectDataset(cc=cc, rays_train=rays, 
+                                rays_test=rays_test, bbox=bbox)
+        
+    print("Camera Config:")
+    print(dataset.cc)
+    return dataset

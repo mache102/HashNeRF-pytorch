@@ -9,7 +9,7 @@ from torch.distributions import Categorical
 
 from radam import RAdam
 
-from load.load_data import CameraConfig
+from load_data import CameraConfig
 from util import debug_dict
 
 from einops import rearrange, reduce
@@ -75,11 +75,11 @@ class VolumetricRenderer:
         seed: random seed 
         dataset_type: dataset type (equirect, blender, etc)
 
-        proc_bsz: num of rays processed in parallel, adjust to prevent OOM
-        net_bsz: num of rays sent to model in parallel (proc_bsz % net_bsz == 0)
+        render_bsz: num of rays processed in parallel, adjust to prevent OOM
+        net_bsz: num of rays sent to model in parallel (render_bsz % net_bsz == 0)
         perturb: 0 for uniform sampling, 1 for jittered (stratified rand points) sampling
-        N_samples: num of coarse samples per ray
-        N_importance: num of additional fine samples per ray
+        coarse_samples: num of coarse samples per ray
+        fine_samples: num of additional fine samples per ray
         use_viewdirs: whether to use full 5D input (+dirs) instead of 3D
         white_bkgd: whether to assume white background
         raw_noise_std: std dev of noise added to regularize sigma_a output, 1e0 recommended
@@ -88,11 +88,11 @@ class VolumetricRenderer:
         self.seed = args.seed 
         self.dataset_type = args.dataset_type
 
-        self.proc_bsz = args.chunk
-        self.net_bsz = args.net_chunk
+        self.render_bsz = args.render_bsz
+        self.net_bsz = args.net_bsz
         self.perturb = args.perturb
-        self.N_samples = args.N_samples 
-        self.N_importance = args.N_importance 
+        self.coarse_samples = args.coarse_samples 
+        self.fine_samples = args.fine_samples 
         self.use_viewdirs = args.use_viewdirs
         self.white_bkgd = args.white_bkgd
         self.raw_noise_std = args.raw_noise_std 
@@ -122,8 +122,8 @@ class VolumetricRenderer:
         total_rays = rays.shape[0]
 
         outputs = {}
-        for i in range(0, total_rays, self.proc_bsz):
-            batch_output = self.render_batch(rays[i:i + self.proc_bsz], **kwargs)
+        for i in range(0, total_rays, self.render_bsz):
+            batch_output = self.render_batch(rays[i:i + self.render_bsz], **kwargs)
             for k, v in batch_output.items():
                 if k not in outputs:
                     outputs[k] = []
@@ -213,13 +213,13 @@ class VolumetricRenderer:
         near, far = bounds[...,0], bounds[...,1] # [N_rays, 1]
 
         # prepare for sampling
-        t_vals = torch.linspace(0., 1., steps=self.N_samples)
+        t_vals = torch.linspace(0., 1., steps=self.coarse_samples)
         if not self.lindisp:
             z_vals = near * (1. - t_vals) + far * (t_vals)
         else:
             z_vals = 1. / (1. / near * (1. - t_vals) + 1. / far * (t_vals))
 
-        z_vals = z_vals.expand([N_rays, self.N_samples])
+        z_vals = z_vals.expand([N_rays, self.coarse_samples])
 
         if perturb > 0.:
             # get intervals between samples
@@ -232,7 +232,7 @@ class VolumetricRenderer:
             z_vals = lower + (upper - lower) * t_rand
 
         # concatenate positional samples
-        # [N_rays, N_samples, 3]
+        # [N_rays, coarse_samples, 3]
         positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
         raw = self.run_network(inputs={"pos": positional, "dir": viewdirs},
                                model_name="coarse")
@@ -240,7 +240,7 @@ class VolumetricRenderer:
                                         raw_noise_std=raw_noise_std)
         weights = coarse_preds.weights
 
-        if self.N_importance > 0:
+        if self.fine_samples > 0:
             z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
             z_samples = self.sample_pdf(z_vals_mid, weights[...,1:-1], 
                                 det=(perturb==0.))
@@ -249,7 +249,7 @@ class VolumetricRenderer:
             z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
 
             # concatenate positional samples
-            # [N_rays, N_samples + N_importance, 3]
+            # [N_rays, coarse_samples + fine_samples, 3]
             positional = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None] 
             model_name = "fine" if self.models["fine"] is not None else "coarse"
             raw = self.run_network(inputs={"pos": positional, "dir": viewdirs},
@@ -258,7 +258,7 @@ class VolumetricRenderer:
             fine_preds = self.raw2outputs(raw, z_vals, rays_d, 
                                             raw_noise_std=raw_noise_std)
 
-        if self.N_importance > 0:
+        if self.fine_samples > 0:
             ret = {
                 "rgb_map_0": coarse_preds.rgb,
                 "depth_map_0": coarse_preds.depth,
@@ -306,16 +306,16 @@ class VolumetricRenderer:
 
         # differences of z vals = dists. last value is 1e10 (astronomically large in the context)
         dists = z_vals[...,1:] - z_vals[...,:-1]
-        dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, N_samples]
+        dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, coarse_samples]
         dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
 
-        rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
+        rgb = torch.sigmoid(raw[...,:3])  # [N_rays, coarse_samples, 3]
         noise = 0.
         if raw_noise_std > 0.: # sigma
             noise = torch.randn(raw[...,3].shape) * raw_noise_std
 
         # sigma_loss = sigma_sparsity_loss(raw[...,3])
-        alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
+        alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, coarse_samples]
         # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
 
         ones = torch.ones((alpha.shape[0], 1))
@@ -344,35 +344,35 @@ class VolumetricRenderer:
     # Hierarchical sampling (section 5.2)
     # def sample_pdf(self, bins, weights, det=False, eps=1e-5):
     #     """
-    #     Sample N_samples samples from bins with distribution defined by weights.
+    #     Sample coarse_samples samples from bins with distribution defined by weights.
     #     Inputs:
-    #         bins: (N_rays, N_samples_+1) where N_samples_ is "the number of coarse samples per ray - 2"
-    #         weights: (N_rays, N_samples_)
-    #         N_samples: the number of samples to draw from the distribution
+    #         bins: (N_rays, coarse_samples_+1) where coarse_samples_ is "the number of coarse samples per ray - 2"
+    #         weights: (N_rays, coarse_samples_)
+    #         coarse_samples: the number of samples to draw from the distribution
     #         det: deterministic or not
     #         eps: a small number to prevent division by zero
     #     Outputs:
     #         samples: the sampled samples
     #     """
-    #     N_samples = self.N_importance 
+    #     coarse_samples = self.fine_samples 
 
-    #     N_rays, N_samples_ = weights.shape
+    #     N_rays, coarse_samples_ = weights.shape
     #     weights = weights + eps # prevent division by zero
-    #     pdf = weights / reduce(weights, 'n1 n2 -> n1 1', 'sum') # (N_rays, N_samples) (keep dims)
-    #     cdf = torch.cumsum(pdf, -1) # (N_rays, N_samples), cumulative distribution function
-    #     cdf = torch.cat([torch.zeros_like(cdf[: ,:1]), cdf], -1)  # (N_rays, N_samples_+1) 
+    #     pdf = weights / reduce(weights, 'n1 n2 -> n1 1', 'sum') # (N_rays, coarse_samples) (keep dims)
+    #     cdf = torch.cumsum(pdf, -1) # (N_rays, coarse_samples), cumulative distribution function
+    #     cdf = torch.cat([torch.zeros_like(cdf[: ,:1]), cdf], -1)  # (N_rays, coarse_samples_+1) 
     #                                                             # padded to 0~1 inclusive
 
     #     if det:
-    #         u = torch.linspace(0, 1, N_samples, device=bins.device)
-    #         u = u.expand(N_rays, N_samples)
+    #         u = torch.linspace(0, 1, coarse_samples, device=bins.device)
+    #         u = u.expand(N_rays, coarse_samples)
     #     else:
-    #         u = torch.rand(N_rays, N_samples, device=bins.device)
+    #         u = torch.rand(N_rays, coarse_samples, device=bins.device)
     #     u = u.contiguous()
 
     #     inds = torch.searchsorted(cdf, u, right=True)
     #     below = torch.clamp_min(inds-1, 0)
-    #     above = torch.clamp_max(inds, N_samples_)
+    #     above = torch.clamp_max(inds, coarse_samples_)
 
     #     inds_sampled = rearrange(torch.stack([below, above], -1), 'n1 n2 c -> n1 (n2 c)', c=2)
     #     cdf_g = rearrange(torch.gather(cdf, 1, inds_sampled), 'n1 (n2 c) -> n1 n2 c', c=2)
@@ -386,7 +386,7 @@ class VolumetricRenderer:
     #     return samples
 
     def sample_pdf(self, bins, weights, det=False):
-        N_samples = self.N_importance
+        coarse_samples = self.fine_samples
         # Get pdf
         weights = weights + 1e-5 # prevent nans
         pdf = weights / torch.sum(weights, -1, keepdim=True)
@@ -395,17 +395,17 @@ class VolumetricRenderer:
 
         # Take uniform samples
         if det:
-            u = torch.linspace(0., 1., steps=N_samples)
-            u = u.expand(list(cdf.shape[:-1]) + [N_samples])
+            u = torch.linspace(0., 1., steps=coarse_samples)
+            u = u.expand(list(cdf.shape[:-1]) + [coarse_samples])
         else:
-            u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
+            u = torch.rand(list(cdf.shape[:-1]) + [coarse_samples])
 
         # Pytest, overwrite u with numpy's fixed random numbers
         # if pytest:
         #     np.random.seed(0)
-        #     new_shape = list(cdf.shape[:-1]) + [N_samples]
+        #     new_shape = list(cdf.shape[:-1]) + [coarse_samples]
         #     if det:
-        #         u = np.linspace(0., 1., N_samples)
+        #         u = np.linspace(0., 1., coarse_samples)
         #         u = np.broadcast_to(u, new_shape)
         #     else:
         #         u = np.random.rand(*new_shape)
@@ -416,7 +416,7 @@ class VolumetricRenderer:
         inds = torch.searchsorted(cdf, u, right=True)
         below = torch.max(torch.zeros_like(inds-1), inds-1)
         above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
-        inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
+        inds_g = torch.stack([below, above], -1)  # (batch, coarse_samples, 2)
 
         # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
         # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
@@ -436,21 +436,74 @@ if __name__ == '__main__':
     testing purposes only
     """
     N_rays = 4
-    N_samples = 101
+    coarse_samples = 101
 
     n, f = 0.2, 0.6
-    t = np.linspace(0, 1, N_samples)
+    t = np.linspace(0, 1, coarse_samples)
 
     z = 1 / ((1 - t) / n + t / f)
 
-    z = np.broadcast_to(z, (N_rays, N_samples))
+    z = np.broadcast_to(z, (N_rays, coarse_samples))
 
     rays_d = np.random.rand(N_rays, 3)
 
-    pts = rays_d[...,None,:] * z[...,:,None] # [N_rays, N_samples, 3]
+    pts = rays_d[...,None,:] * z[...,:,None] # [N_rays, coarse_samples, 3]
 
     # plot all pts 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     ax.scatter(pts[...,0], pts[...,1], pts[...,2])
     plt.show()
+
+
+def prepare_rays(cc: CameraConfig, 
+                rays = None, c2w = None,
+                c2w_staticcam = None, ndc: bool = False, 
+                use_viewdirs: bool = False):
+    """
+    Prepare rays for rendering in batches
+
+    returns:
+        rays: (N, 8) or (N, 11) if use_viewdirs
+        reshape_to: shape of rays_d before flattening
+    """
+    if c2w is not None:
+        # special case to render full image
+        rays_o, rays_d = get_rays(cc.height, cc.width, c2w, 
+                                  focal=cc.focal, K=cc.k)
+    else:
+        # use provided ray batch
+        rays_o, rays_d = rays
+
+    # use viewdirs (rays_d)
+    if use_viewdirs:
+        # provide ray directions as input
+        viewdirs = rays_d
+        if c2w_staticcam is not None:
+            # special case to visualize effect of viewdirs
+            rays_o, rays_d = get_rays(cc.height, cc.width, 
+                                      c2w_staticcam, focal=cc.focal, K=cc.k)
+        viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
+        viewdirs = viewdirs.reshape(-1,3).float()
+
+    # we take note of the rays' shape 
+    # prior to flattening 
+    # for reshaping later
+    # [..., 3]
+    reshape_to = list(rays_d.shape[:-1])
+    # normalized device coordinates, for forward facing scenes
+    if ndc:
+        rays_o, rays_d = get_ndc_rays(cc.height, cc.width, focal=cc.k[0][0], 
+                                        near=1., rays_o=rays_o, rays_d=rays_d)
+
+    # Create ray batch
+    # (N, 3)
+    rays_o = rays_o.reshape(-1,3).float()
+    rays_d = rays_d.reshape(-1,3).float()
+
+    near, far = cc.near * torch.ones_like(rays_d[...,:1]), cc.far * torch.ones_like(rays_d[...,:1])
+    rays = torch.cat([rays_o, rays_d, near, far], -1)
+    if use_viewdirs:
+        rays = torch.cat([rays, viewdirs], -1)
+
+    return rays, reshape_to

@@ -6,12 +6,12 @@ from networks.hash_nerf import HashNeRF
 from networks.vanilla_nerf import VanillaNeRF
 from radam import RAdam
 from ray_util import *
-from load.load_data import load_data
+from load_data import load_data
 
 from util import *
 from parse_args import config_parser
 
-from trainers.equirect import EquirectTrainer 
+from trainer import EquirectTrainer 
 from trainers.standard import StandardTrainer
 
 # 20231010 15:25
@@ -34,7 +34,7 @@ def main():
 
     if args.use_viewdirs:
         print("=== Using viewdirs ===")
-    if args.N_importance > 0:
+    if args.fine_samples > 0:
         print("=== Using fine model ===")
     if args.render_only:
         print("=== Rendering only ===")
@@ -104,7 +104,7 @@ def main():
         
     elif not args.use_gradient:
         print("Coarse model: VanillaNeRF")
-        if args.N_importance > 0:
+        if args.fine_samples > 0:
             model_config["coarse"]["output_ch"] += 1
             model_config["fine"]["output_ch"] += 1
         model_coarse = VanillaNeRF(model_config["coarse"], input_ch=input_ch, 
@@ -114,7 +114,7 @@ def main():
     models["coarse"] = model_coarse
     grad_vars = list(models["coarse"].parameters())
 
-    if args.N_importance > 0:
+    if args.fine_samples > 0:
         if args.i_embed == "hash":
             print("Fine model: HashNeRF")
             model_fine = HashNeRF(model_config["fine"], input_ch=input_ch, 

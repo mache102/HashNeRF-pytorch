@@ -35,9 +35,9 @@ def config_parser():
                         help='learning rate')
     parser.add_argument("--lr_decay", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')
-    parser.add_argument("--chunk", type=int, default=1024*32,
+    parser.add_argument("--render_bsz", type=int, default=1024*32,
                         help='number of rays processed in parallel, decrease if running out of memory')
-    parser.add_argument("--net_chunk", type=int, default=1024*64,
+    parser.add_argument("--net_bsz", type=int, default=1024*64,
                         help='number of pts sent through network in parallel, decrease if running out of memory')
     parser.add_argument("--use_batching", action='store_true',
                         help='only take random rays from 1 image at a time')
@@ -47,9 +47,9 @@ def config_parser():
                         help='specific weights npy file to reload for coarse network')
 
     # rendering options
-    parser.add_argument("--N_samples", type=int, default=64,
+    parser.add_argument("--coarse_samples", type=int, default=64,
                         help='number of coarse samples per ray')
-    parser.add_argument("--N_importance", type=int, default=0,
+    parser.add_argument("--fine_samples", type=int, default=0,
                         help='number of additional fine samples per ray')
     parser.add_argument("--perturb", type=float, default=1.,
                         help='set to 0. for no jitter, 1. for jitter')
@@ -84,32 +84,6 @@ def config_parser():
                         help='options: llff / blender / deepvoxels / equirect')
     parser.add_argument("--testskip", type=int, default=8,
                         help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
-
-    ## deepvoxels flags
-    parser.add_argument("--shape", type=str, default='greek',
-                        help='options : armchair / cube / greek / vase')
-
-    ## blender flags
-    parser.add_argument("--white_bkgd", action='store_true',
-                        help='set to render synthetic data on a white bkgd (always use for dvoxels)')
-    parser.add_argument("--half_res", action='store_true',
-                        help='load blender synthetic data at 400x400 instead of 800x800')
-
-    ## scannet flags
-    parser.add_argument("--scannet_sceneID", type=str, default='scene0000_00',
-                        help='sceneID to load from scannet')
-
-    ## llff flags
-    parser.add_argument("--factor", type=int, default=8,
-                        help='downsample factor for LLFF images')
-    parser.add_argument("--ndc", action='store_true',
-                        help='use normalized device coordinates (set for forward facing scenes)')
-    parser.add_argument("--lindisp", action='store_true',
-                        help='sampling linearly in disparity rather than depth')
-    parser.add_argument("--spherify", action='store_true',
-                        help='set for spherical 360 scenes')
-    parser.add_argument("--llffhold", type=int, default=8,
-                        help='will take every 1/N images as LLFF test set, paper uses 8')
 
     ## equirect flags
     # use_depth:
