@@ -1,31 +1,34 @@
-import io
+import json
 import requests
+import matplotlib.pyplot as plt
+import numpy as np
+import base64
+
+from io import BytesIO
 from PIL import Image
-import torch
-import numpy
 
-from transformers import DetrFeatureExtractor, DetrForSegmentation
-from transformers.models.detr.feature_extraction_detr import rgb_to_id
+API_TOKEN = 'token'
+headers = {"Authorization": f"Bearer {API_TOKEN}"}
+API_URL = "https://api-inference.huggingface.co/models/nvidia/segformer-b3-finetuned-cityscapes-1024-1024"
+def query(filename):
+    with open(filename, "rb") as f:
+        data = f.read()
+    response = requests.request("POST", API_URL, headers=headers, data=data)
+    return json.loads(response.content.decode("utf-8"))
 
-url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-url = "https://media.istockphoto.com/id/135877652/photo/new-shopping-center.jpg?s=612x612&w=0&k=20&c=rmPt1VBDUhPI_nqvtOL7xgKUtk1n-HjLZi--njdgBPc="
-image = Image.open(requests.get(url, stream=True).raw)
+fp = "imgs/gmap_rail1_rgb.png"
+data = query(fp)
 
-feature_extractor = DetrFeatureExtractor.from_pretrained("facebook/detr-resnet-50-panoptic")
-model = DetrForSegmentation.from_pretrained("facebook/detr-resnet-50-panoptic")
+for item in data:
+    if item["label"] == 'sky':
+        break
+mask_str = item['mask']
+binary_data = base64.b64decode(mask_str)
+with BytesIO(binary_data) as bio:
+    image = Image.open(bio)
+    mask = np.array(image)
 
-# prepare image for the model
-inputs = feature_extractor(images=image, return_tensors="pt")
+plt.imshow(mask)
+plt.show()
 
-# forward pass
-outputs = model(**inputs)
-
-# use the `post_process_panoptic` method of `DetrFeatureExtractor` to convert to COCO format
-processed_sizes = torch.as_tensor(inputs["pixel_values"].shape[-2:]).unsqueeze(0)
-result = feature_extractor.post_process_panoptic(outputs, processed_sizes)[0]
-
-# the segmentation is stored in a special-format png
-panoptic_seg = Image.open(io.BytesIO(result["png_string"]))
-panoptic_seg = numpy.array(panoptic_seg, dtype=numpy.uint8)
-# retrieve the ids corresponding to each mask
-panoptic_seg_id = rgb_to_id(panoptic_seg)
+# save the mask to img directory

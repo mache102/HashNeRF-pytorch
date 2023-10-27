@@ -11,12 +11,12 @@ BOX_OFFSETS = torch.tensor([[[i,j,k] for i in [0, 1] for j in [0, 1] for k in [0
                             device='cuda')
 
 class HashEmbedder(nn.Module):
-    def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\
+    def __init__(self, bbox, n_levels=16, n_features_per_level=2,\
                 log2_hashmap_size=19, base_resolution=16, finest_resolution=512):
         """
         Hash embedder as described in instant-ngp paper
         
-        bounding_box: (2, 3), min and max x,y,z coordinates of object bbox
+        bbox: (2, 3), min and max x,y,z coordinates of object bbox
         n_levels: int, number of embedding levels
         n_features_per_level: int, number of features per level
         log2_hashmap_size: int, log2 of hashmap size
@@ -39,7 +39,7 @@ class HashEmbedder(nn.Module):
 
         """
         super(HashEmbedder, self).__init__()
-        self.bounding_box = bounding_box
+        self.bbox = bbox
         self.n_levels = n_levels
         self.n_features_per_level = n_features_per_level
         self.log2_hashmap_size = log2_hashmap_size
@@ -56,22 +56,21 @@ class HashEmbedder(nn.Module):
             nn.init.uniform_(self.embeddings[i].weight, a=-0.0001, b=0.0001)
             # self.embeddings[i].weight.data.zero_()
 
-    def get_voxel_vertices(self, resolution: torch.Tensor):
+    def get_voxel_vertices(self, x, resolution: torch.Tensor):
         """
         resolution: number of voxels per axis
         """
-        box_min, box_max = self.bounding_box
+        box_min, box_max = self.bbox
 
         # clip if some points are outside bounding box
-        keep_mask = self.xyz == torch.max(torch.min(self.xyz, box_max), box_min)
-        if not torch.all(self.xyz <= box_max) or not torch.all(self.xyz >= box_min):
+        if not torch.all(x <= box_max) or not torch.all(x >= box_min):
             # print("ALERT: some points are outside bounding box. Clipping them!")
-            self.xyz = torch.clamp(self.xyz, min=box_min, max=box_max)
+            x = torch.clamp(x, min=box_min, max=box_max)
 
 
         grid_size = (box_max - box_min)/resolution
         
-        bottom_left_idx = torch.floor((self.xyz - box_min) / grid_size).int()
+        bottom_left_idx = torch.floor((x - box_min) / grid_size).int()
         voxel_min_vertex = bottom_left_idx * grid_size + box_min
         voxel_max_vertex = voxel_min_vertex + torch.tensor([1.0,1.0,1.0])*grid_size
 
@@ -79,35 +78,29 @@ class HashEmbedder(nn.Module):
         voxel_indices = bottom_left_idx.unsqueeze(1) + BOX_OFFSETS
         hashed_voxel_indices = hash(voxel_indices, self.log2_hashmap_size)
 
-        return voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices, keep_mask
+        return voxel_min_vertex, voxel_max_vertex, hashed_voxel_indices
 
     def forward(self, x):
         """
         Embed an input point cloud x
         
         x: (net_bsz, 3), 3D coordinates of samples
-        ^ we define a temporary class attr self.xyz to store x
-        for use in get_voxel_vertices
 
         For each level, we compute the voxel vertices and the corresponding
         voxel embeddings. Then we interpolate the embeddings at the input
         coordinates x. 
         """
-        # set x as a class attr 
-        self.xyz = x
-
         x_embedded = []
         for i in range(self.n_levels):
             resolution = torch.floor(self.base_resolution * self.b**i)
             voxel_min_vertex, voxel_max_vertex, \
-                hashed_voxel_indices, keep_mask = \
-                self.get_voxel_vertices(resolution=resolution)
+                hashed_voxel_indices = \
+                self.get_voxel_vertices(x, resolution=resolution)
             
             voxel_embedds = self.embeddings[i](hashed_voxel_indices)
             x_embedded.append(trilinear_interp(x, voxel_min_vertex, voxel_max_vertex, voxel_embedds))
 
-        keep_mask = keep_mask.sum(dim=-1)==keep_mask.shape[-1]
-        return torch.cat(x_embedded, dim=-1), keep_mask
+        return torch.cat(x_embedded, dim=-1)
 
 def hash(coords, log2_hashmap_size):
     """

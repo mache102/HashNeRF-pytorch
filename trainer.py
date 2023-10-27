@@ -1,32 +1,46 @@
 import argparse
 import torch
 import numpy as np
-
 import imageio
 
+from dataclasses import dataclass 
 from tqdm import trange, tqdm 
 
 from load_data import EquirectDataset
 from renderer import VolumetricRenderer, prepare_rays
-from ray_util import * 
-from util import *
+from util.rays import * 
+from util.util import *
+from util.math import to_8b, img2mse, mse2psnr
+
+@dataclass 
+class RayBatch:
+    origins: torch.Tensor # (render_bsz, 3)
+    directions: torch.Tensor # (render_bsz, 1)
+
+@dataclass 
+class TargetBatch:
+    color: torch.Tensor # (render_bsz, 3)
+    depth: torch.Tensor # (render_bsz, 1)
+    gradient: torch.Tensor = None # (render_bsz, 1)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class Trainer():
     def __init__(self, dataset: EquirectDataset, models: dict, 
                  optimizer: torch.optim.Optimizer,
-                 embedders: dict, args: argparse.Namespace):
+                 embedders: dict, usage: dict, 
+                 args: argparse.Namespace):
 
         self.args = args
         self.models = models
         self.optimizer = optimizer
         self.embedders = embedders
+        self.usage = usage
 
         self.unpack_dataset(dataset)
         self.volren = VolumetricRenderer(cc=self.cc, models=models,
                                          embedders=embedders,
-                                         args=args)
+                                         usage=usage, args=args)
 
         self.savepath = args.savepath
         self.train_bsz = args.train_bsz
@@ -60,86 +74,108 @@ class Trainer():
         """
         print(f"Training iterations {self.start} to {self.end}")
 
-        for iter in trange(self.start, self.end):
+        for iteration in trange(self.start, self.end):
+            self.iteration = iteration 
+
             # retrieve batch of data
-            batch, targets = self.get_batch(start=self.next_batch_idx, step=self.train_bsz)
+            rays, targets = self.get_batch(start=self.next_batch_idx, step=self.train_bsz)
             self.next_batch_idx += self.train_bsz
 
             # shuffle 
-            if self.next_batch_idx >= self.rays_train.rgb.shape[0]:
+            if self.next_batch_idx >= self.rays_train.color.shape[0]:
                 print("Shuffle data after an epoch!")
                 self.rays_train = shuffle_rays(self.rays_train)
                 self.next_batch_idx = 0 # reset
 
-            # optimize
-            rays, reshape_to = prepare_rays(self.cc, rays=[batch["o"], batch["d"]], 
-                                            use_viewdirs=self.args.use_viewdirs)
-            preds, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
-            loss, psnr, psnr_0 = self.calc_loss(preds, targets, extras)
+            outputs = self.volren.render(rays=rays)
+            loss, psnr = self.calc_loss(outputs, targets)
             self.update_lr()
-            self.log_progress(iter)
 
-            if iter % self.args.i_print == 0:
-                tqdm.write(f"[TRAIN] Iter: {iter} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            if iteration % self.args.iter_ckpt == 0:
+                self.save_ckpt()
+
+            if iteration % self.args.iter_test == 0 and iter > 0:
+                if self.args.stage > 0:
+                    test_fp = os.path.join(self.savepath, 'stage{}_test_{:06d}'.format(self.args.stage, iteration))
+                else:
+                    test_fp = os.path.join(self.savepath, 'testset_{:06d}'.format(iteration))
+
+                self.eval_test(test_fp)
+                
+
+            if iteration % self.args.iter_print == 0:
+                tqdm.write(f"[TRAIN] Iter: {iteration} Loss: {loss.item()}  PSNR: {psnr.item()}")
 
             self.global_step += 1
 
 
-    def get_batch(self, start, step):
+    def get_batch(self, start, step, get_target=True):
+        """
+        Retrieve a batch of rays (self.train_bsz)
+        for training 
+        """
         end = start + step   
-        batch = {
-            "o": self.rays_train.o[start:end],
-            "d": self.rays_train.d[start:end]
-        }
+        dir = self.rays_train.direction[start:end]
 
-        target = {
-            "rgb_map": self.rays_train.rgb[start:end],
-            "depth_map": self.rays_train.d[start:end], # d not depth?
-            "accumulation_map": self.rays_train.gradient[start:end]
-        }
-        return batch, target
+        # (train_bsz, 3+3+1+1)
+        rays = torch.cat([self.rays_train.origin[start:end], 
+                          dir,
+                          torch.full((step, 1), self.cc.near),
+                          torch.full((step, 1), self.cc.far)], -1)
 
-    def calc_loss(self, preds, targets, extras):
-        
-        # unpack
-        rgb = preds["rgb_map"]
-        depth = preds["depth_map"]
-        gradient = preds["accumulation_map"]
+        if self.usage["dir"]:
+            dir = dir / torch.norm(dir, dim=-1, keepdim=True)
+            rays = torch.cat([rays, dir[:, None]], -1)
+   
+        rays = torch.cat([rays, self.rays_train.ts[start:end]], -1)
 
-        t_rgb = targets["rgb_map"]
-        t_depth = targets["depth_map"]
-        t_gradient = targets["accumulation_map"]
+        if not get_target:
+            return rays
 
-        # final psnr
-        # print(rgb.shape, t_rgb.shape)
+        gradient = self.rays_train.gradient[start:end] if self.usage["gradient"] else None
+        targets = TargetBatch(color=self.rays_train.color[start:end],
+                              depth=self.rays_train.depth[start:end],
+                              gradient=gradient)
+        return rays, targets
+
+    def calc_loss(self, outputs, targets):
         self.optimizer.zero_grad()
-        rgb_loss = img2mse(rgb, t_rgb)
-        psnr = mse2psnr(rgb_loss)
-        loss = rgb_loss
-        # depth_loss
-        if self.args.use_depth:
-            loss += torch.abs(depth - t_depth).mean()
-            
-        if self.args.use_gradient:
-            loss += img2mse(gradient, t_gradient)
+
+        loss_dict = {}
+        if self.args.N_fine > 0:
+            loss_dict['color'] = img2mse(outputs["fine_color"], targets.color)
+            psnr = mse2psnr(loss_dict['color'])
+
+            if self.usage["depth"]:
+                loss_dict['depth'] = torch.abs(outputs["fine_depth"] - targets.depth).mean() 
+                loss_dict['depth_'] = torch.abs(outputs["coarse_depth"], targets.depth).mean()
+
+            if self.usage["gradient"]:
+                loss_dict['gradient'] = img2mse(outputs["fine_gradient"], targets.gradient)
+                loss_dict['gradient_'] = img2mse(outputs["coarse_gradient"], targets.gradient)
         
-        # coarse psnr (if coarse is not final)
-        psnr_0 = None
-        if 'rgb_0' in extras:
-            rgb_loss_0 = img2mse(extras['rgb_0'], t_rgb)
-            loss += rgb_loss_0
-            if self.args.use_depth:
-                loss += torch.abs(extras['depth_0'] - t_depth).mean()
+        else:
+            loss_dict['color'] = img2mse(outputs["coarse_color"], targets.color)
+            psnr = mse2psnr(loss_dict['color'])
 
-            if self.args.use_gradient:
-                loss += img2mse(extras['grad_0'], t_gradient)
+            if self.usage["depth"]:
+                loss_dict['depth'] = torch.abs(outputs["coarse_depth"], targets.depth).mean()
 
-            psnr_0 = mse2psnr(rgb_loss_0)
+            if self.usage["gradient"]:
+                loss_dict['gradient'] = img2mse(outputs["coarse_gradient"], targets.gradient)
+               
+        loss = sum(loss_dict.values())
+
+        sparsity_loss = self.args.sparse_loss_weight \
+            * (outputs["coarse_sparsity_loss"].sum() \
+            + outputs.get("fine_sparsity_loss", torch.tensor(0)).sum())
+        loss += sparsity_loss
+
 
         loss.backward()
         self.optimizer.step()
 
-        return loss, psnr, psnr_0
+        return loss, psnr
 
     def update_lr(self):
         decay_steps = self.args.lr_decay * 1000
@@ -147,50 +183,40 @@ class Trainer():
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = new_lr
 
-    def log_progress(self, iter):
-        """
-        SAVE CHECKPOINT
-        """
-        if iter % self.args.i_weights == 0:
-            path = os.path.join(self.savepath, '{:06d}.tar'.format(iter))
-            if self.args.i_embed == "hash":
-                torch.save({
-                    'global_step': self.global_step,
-                    'coarse_model_state_dict': self.models["coarse"].state_dict(),
-                    'fine_model_state_dict': self.models["fine"].state_dict(),
-                    'pos_embedder_state_dict': self.embedders["pos"].state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
-                }, path)
-            else:
-                torch.save({
-                    'global_step': self.global_step,
-                    'coarse_model_state_dict': self.models["coarse"].state_dict(),
-                    'fine_model_state_dict': self.models["fine"].state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
-                }, path)
-            print('Saved checkpoints at', path)
+    def save_ckpt(self):
+        """Save checkpoint"""    
+        path = os.path.join(self.savepath, f'{self.iteration:06d}.tar')
 
+        ckpt_dict = {
+            "global_step": self.global_step,
+            "model": {},
+            "embedder": {},
+        }
+        # models
+        for k, v in self.models.items():
+            if v is None: continue
+            ckpt_dict["model"][k] = v.state_dict()
+        # embedders (only if trainable)
+        for k, v in self.embedders.items():
+            if v is None: continue
+            ckpt_dict["embedder"][k] = v.state_dict()
+        # optimizer
+        ckpt_dict["optimizer"] = self.optimizer.state_dict()
+        torch.save(ckpt_dict, path)
+        print('Saved checkpoints at', path)
         
-        if iter % self.args.i_testset == 0 and iter > 0:
-            if self.args.stage > 0:
-                test_fp = os.path.join(self.savepath, 'stage{}_test_{:06d}'.format(self.args.stage, iter))
-            else:
-                test_fp = os.path.join(self.savepath, 'testset_{:06d}'.format(iter))
-
-            self.eval_test(test_fp)
-            
     def eval_test(self, test_fp):
         """
         Testing set evaluation.
         """
         os.makedirs(test_fp, exist_ok=True)
         with torch.no_grad():
-            rgbs, _ = self.render_save(self.rays_test.o, self.rays_test.d, 
+            rgbs, _ = self.render_save(self.rays_test.origin, self.rays_test.direction, 
                                         savepath=test_fp)
         print('Done rendering', test_fp)
 
         # calculate MSE and PSNR for last image(gt pose)
-        gt_loss = img2mse(torch.tensor(rgbs[-1]), torch.tensor(self.rays_test.rgb[-1]))
+        gt_loss = img2mse(torch.tensor(rgbs[-1]), torch.tensor(self.rays_test.color[-1]))
         gt_psnr = mse2psnr(gt_loss)
         print('ground truth loss: {}, psnr: {}'.format(gt_loss, gt_psnr))
         with open(os.path.join(test_fp, 'statistics.txt'), 'w') as f:
@@ -218,15 +244,13 @@ class Trainer():
         batch = h * w    
         for idx in trange(rays_o.shape[0] // batch):
             start = idx * batch
-            end = (idx + 1) * batch
-            rays, reshape_to = \
-                prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
-                             use_viewdirs=self.args.use_viewdirs)
-            # print(rays.shape)
-            preds, _ = \
-                self.volren.render(rays=rays, reshape_to=reshape_to)
-            
-            rgb, depth = preds["rgb_map"], preds["depth_map"]
+
+            rays = self.get_batch(start, step=batch, get_target=False)
+
+            outputs = self.render(rays=rays)
+            prefix = "fine" if self.args.N_fine > 0 else "coarse"
+            rgb, depth = outputs[f"{prefix}_color"], outputs[f"{prefix}_depth"]
+
             if idx == 0:
                 print(rgb.shape, depth.shape)
             rgb = rgb.reshape(h, w, 3).cpu().numpy()

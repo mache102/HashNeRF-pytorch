@@ -2,38 +2,26 @@ import json
 import os 
 import torch
 
-from networks.hash_nerf import HashNeRF
-from networks.vanilla_nerf import VanillaNeRF
 from radam import RAdam
-from ray_util import *
-from load_data import load_data
+from util.rays import *
+from load_data import load
+from embedders import get_embedders
+from networks import get_networks
 
-from util import *
+from util.util import *
 from parse_args import config_parser
 
 from trainer import Trainer 
 
+CONFIG_PATH = "configs/"
 # 20231010 15:25
   
 def main():
     """
     Main NeRF pipeline    
-
-    1. Load dataset
-    2. Create experiment savepath, savename, etc.
-    3. Load model config
-    4. Create embedding functions for position & viewdirs
-    5. Create coarse and fine models
-    6. Create optimizer
-    7. Load checkpoints if available
-    8. Create trainer
-    9a. Render/test/evaluate, no training
-    9b. Enter training loop
     """
 
-    if args.use_viewdirs:
-        print("=== Using viewdirs ===")
-    if args.fine_samples > 0:
+    if args.N_fine > 0:
         print("=== Using fine model ===")
     if args.render_only:
         print("=== Rendering only ===")
@@ -42,7 +30,8 @@ def main():
     1. Load dataset
     """
     print("Load data")
-    dataset = load_data(args)
+    dataset = load(args)
+    args.bbox = dataset.bbox
     """
     2. Experiment savepath, savename, etc.
     """
@@ -56,87 +45,69 @@ def main():
     print("Saved configs")
 
     """
-    3. Load model config
+    3. Create embedding functions
     """
-    fp = os.path.join("model_configs", f"{args.model_config}.json")
+    fp = os.path.join(CONFIG_PATH, f"EMBED_{args.embed_config}.json")
+    if not os.path.isfile(fp):
+        raise ValueError(f"Embed configuration not found: {fp}")
+    with open(fp, "r") as f:
+        embedder_config = json.load(f)
+        print(f"Loaded embed config {args.embed_config}")
+
+    # some embedders are trainable so we add them to a model dict in advance
+    embedders = get_embedders(embedder_config, dataset)
+    input_chs = {}
+    for k in embedders:
+        if embedders[k] is None:
+            input_chs[k] = 0
+            continue
+        input_chs[k] = embedders[k].out_dim
+
+    em_xyz_params = None
+    if embedder_config["xyz"]["type"] == "hash":
+        # hashed embedding table
+        em_xyz_params = list(embedders["xyz"].parameters())
+    print("Embedders created")
+
+    """
+    4. Create coarse and fine models
+    """
+    fp = os.path.join(CONFIG_PATH, f"MODEL_{args.model_config}.json")
     if not os.path.isfile(fp):
         raise ValueError(f"Model configuration not found: {fp}")
     with open(fp, "r") as f:
         model_config = json.load(f)
         print(f"Loaded model config {args.model_config}")
 
-    """
-    4. Create embedding functions for position & viewdirs
-    """
-    embedders = {
-        "pos": None,
-        "dir": None
+    usage = {
+        "dir": embedder_config.get("dir") is not None,
+        "tv_loss": embedder_config["xyz"]["type"] == "hash",
+        "depth": args.use_depth,
+        "gradient": args.use_gradient,
+        "fine": args.N_fine > 0
     }
-    # input ch as in model input ch
-    embedders["pos"], input_ch = get_embedder(name=args.i_embed, args=args, 
-                                              multires=args.multires,
-                                              bbox=dataset.bbox)
-    print(f"XYZ embedder: {args.i_embed}")
-    if args.i_embed == 'hash':
-        # hashed embedding table
-        pos_embedder_params = list(embedders["pos"].parameters())
-
-    input_ch_views = 0
-    if args.use_viewdirs:
-        # if using hashed for xyz, use SH for views
-        print(f"viewdirs embedder: {args.i_embed_views}")
-        embedders["dir"], input_ch_views = get_embedder(name=args.i_embed_views,
-                                                        args=args, multires=args.multires_views,
-                                                        bbox=dataset.bbox)
+    models = get_networks(model_config, input_chs, usage, args)
+    
+    grad_vars = []
+    for k in models:
+        # move to device first
+        models[k] = models[k].to(device)
+        grad_vars += list(models[k].parameters())
+    # for k in embedders:
+    #     if is_trainable[k]:
+    #         embedders[k] = embedders[k].to(device)
+    #         grad_vars += list(embedders[k].parameters())
+    print("Models created")
 
     """
-    5. Create coarse and fine models
-    """
-    models = {
-        "coarse": None,
-        "fine": None
-    }
-    if args.i_embed == "hash":
-        print("Coarse model: HashNeRF")
-        model_coarse = HashNeRF(model_config["coarse"], input_ch=input_ch, 
-                                input_ch_views=input_ch_views).to(device)
-        
-    elif not args.use_gradient:
-        print("Coarse model: VanillaNeRF")
-        if args.fine_samples > 0:
-            model_config["coarse"]["output_ch"] += 1
-            model_config["fine"]["output_ch"] += 1
-        model_coarse = VanillaNeRF(model_config["coarse"], input_ch=input_ch, 
-                                   input_ch_views=input_ch_views, 
-                                   use_viewdirs=args.use_viewdirs,
-                                   use_gradient=args.use_gradient).to(device)
-    models["coarse"] = model_coarse
-    grad_vars = list(models["coarse"].parameters())
-
-    if args.fine_samples > 0:
-        if args.i_embed == "hash":
-            print("Fine model: HashNeRF")
-            model_fine = HashNeRF(model_config["fine"], input_ch=input_ch, 
-                                    input_ch_views=input_ch_views).to(device)
-            
-        elif not args.use_gradient:
-            print("Fine model: VanillaNeRF")
-            model_fine = VanillaNeRF(model_config["fine"], input_ch=input_ch, 
-                                    input_ch_views=input_ch_views, 
-                                    use_viewdirs=args.use_viewdirs,
-                                    use_gradient=args.use_gradient).to(device)
-        models["fine"] = model_fine
-        grad_vars += list(models["fine"].parameters())
-
-    """
-    6. Create optimizer
+    5. Create optimizer
     """
     if args.i_embed == "hash":
         print("Optimizer: RAdam")
         optimizer = \
             RAdam([
                 {'params': grad_vars, 'weight_decay': 1e-6},
-                {'params': pos_embedder_params, 'eps': 1e-15}
+                {'params': em_xyz_params, 'eps': 1e-15}
             ], lr=args.lr, betas=(0.9, 0.99))
     else:
         print("Optimizer: Adam")
@@ -148,8 +119,9 @@ def main():
             )
 
     """
-    7. Load checkpoints if available
+    6. Load checkpoints if available
     """
+    # update this 
     global_step = 0
     if args.ft_path is not None and args.ft_path!='None':
         ckpts = [args.ft_path]
@@ -172,45 +144,31 @@ def main():
         models["coarse"].load_state_dict(ckpt['coarse_model_state_dict'])
         if models["fine"] is not None:
             models["fine"].load_state_dict(ckpt['fine_model_state_dict'])
-        if args.i_embed == "hash":
-            embedders["pos"].load_state_dict(ckpt['pos_embedder_state_dict'])
+        if args.em_xyz == "hash":
+            embedders["xyz"].load_state_dict(ckpt['xyz_embedder_state_dict'])
 
     args.global_step = global_step
     """
-    8. Create trainer
+    7. Create trainer
     """
-    if args.dataset_type == "equirect":
-        print("Using equirect trainer")
-        tclass = EquirectTrainer 
-    else:
-        print("Using standard trainer")
-        tclass = StandardTrainer
-    trainer = tclass(dataset=dataset, models=models, 
-                     optimizer=optimizer, embedders=embedders, 
-                     args=args)
+    trainer = Trainer(dataset=dataset, models=models, 
+                      optimizer=optimizer, embedders=embedders, 
+                      usage=usage, args=args)
 
-    """
-    9a. Render/test/evaluate, no training
-    """
     if args.render_only:
         render_only(trainer)
         return 
-    
-    """
-    9b. Enter training loop
-    """
+
     print("Start training")
     trainer.fit()
 
 def render_only(trainer):
     print('RENDER ONLY')
-    if args.dataset_type == 'equirect':
-        if args.stage > 0:
-            test_fp = os.path.join(args.savepath, 'renderonly_stage_{}_{:06d}'.format(args.stage, args.global_step))
-        else:
-            test_fp = os.path.join(args.savepath, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', args.global_step))
+    if args.stage > 0:
+        test_fp = os.path.join(args.savepath, 'renderonly_stage_{}_{:06d}'.format(args.stage, args.global_step))
     else:
-        test_fp = os.path.join(args.savepath, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', args.global_step))    
+        test_fp = os.path.join(args.savepath, 'renderonly_train_{}_{:06d}'.format('test' if args.render_test else 'path', args.global_step))
+
 
     trainer.eval_test(test_fp)
 
@@ -220,8 +178,6 @@ if __name__ == '__main__':
     parser = config_parser()
     args = parser.parse_args()
     args.train_iters += 1
-    ndc_list = ['llff', 'equirect']
-    args.ndc = args.dataset_type in ndc_list
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -3,12 +3,10 @@ import torch.nn as nn
 
 # Small NeRF for Hash embeddings
 class HashNeRF(nn.Module):
-    def __init__(self, model_config,
-                 input_ch=3, input_ch_views=3):
+    def __init__(self, model_config, input_chs):
         super(HashNeRF, self).__init__()
 
-        self.input_ch = input_ch
-        self.input_ch_views = input_ch_views
+        self.input_chs = input_chs
 
         # move geo feat dim to one level higher?
         self.geo_feat_dim = model_config["sigma"]["geo_feat_dim"]
@@ -26,7 +24,7 @@ class HashNeRF(nn.Module):
         sigma_net = []
         for l in range(layers):
             if l == 0:
-                sigma_net.append(nn.Linear(self.input_ch, hdim, bias=False))
+                sigma_net.append(nn.Linear(self.input_chs["xyz"], hdim, bias=False))
             elif l == layers - 1:
                 sigma_net.append(nn.Linear(hdim, 1 + self.geo_feat_dim, bias=False))
             else:
@@ -45,7 +43,7 @@ class HashNeRF(nn.Module):
         color_net = []
         for l in range(layers):
             if l == 0:
-                color_net.append(nn.Linear(self.input_ch_views + self.geo_feat_dim, hdim, bias=False))
+                color_net.append(nn.Linear(self.input_chs["dir"] + self.geo_feat_dim, hdim, bias=False))
             elif l == layers - 1:
                 color_net.append(nn.Linear(hdim, 3, bias=False))
             else:
@@ -54,7 +52,7 @@ class HashNeRF(nn.Module):
         self.color_net = nn.ModuleList(color_net[:-1]) # exclude the last relu
     
     def forward(self, x):
-        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
+        input_pts, input_views = torch.split(x, [self.input_chs["xyz"], self.input_chs["dir"]], dim=-1)
         # (net_bsz, 3)
 
         # sigma
@@ -76,6 +74,5 @@ class HashNeRF(nn.Module):
         # color = torch.sigmoid(h)
         # h is color
         outputs = torch.cat([h, sigma.unsqueeze(dim=-1)], -1)
-        # (net_bsz, 3 + 1)
-
         return outputs
+        # (net_bsz, 3 + 1)

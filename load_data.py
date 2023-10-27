@@ -10,11 +10,12 @@ from typing import Optional, List, Tuple
 
 @dataclass
 class EquirectRays:
-    o: List[any] = field(default_factory=list)
-    d: List[any] = field(default_factory=list)
-    rgb: List[any] = field(default_factory=list)
+    origin: List[any] = field(default_factory=list)
+    direction: List[any] = field(default_factory=list)
+    color: List[any] = field(default_factory=list)
     depth: List[any] = field(default_factory=list)
     gradient: Optional[List[any]] = None  # gradient (not present in the test set)
+    ts: List[any] = field(default_factory=list) # idx emebed
 
 @dataclass
 class CameraConfig:
@@ -39,19 +40,6 @@ class EquirectDataset:
     rays_train: EquirectRays
     rays_test: EquirectRays
     bbox: Tuple[torch.Tensor, torch.Tensor] 
-
-@dataclass 
-class StandardDataset:
-    # TODO: specify types
-    cc: CameraConfig
-    images: any
-    poses: any
-    render_poses: any
-    bbox: any
-
-    train: any
-    val: any
-    test: any
 
 def concat_all(batch):
     """
@@ -119,9 +107,9 @@ def load_equirect_data(baseDir: str, stage=0):
     image_coords = np.array(image_coords)
     # image_coords = np.concatenate([image_coords, np.array([0.0, 0.0, 0.0]).reshape(1,3)])
     
-    batch = EquirectRays()
-    batch.gradient = []
-    batch_test = EquirectRays()
+    rays_train = EquirectRays()
+    rays_train.gradient = []
+    rays_test = EquirectRays()
     if stage > 0:
         if stage == 1:
             x, z = coord[..., 0], coord[..., 2]
@@ -153,32 +141,41 @@ def load_equirect_data(baseDir: str, stage=0):
                 # so we mask them out
                 mask = np.asarray(Image.open(os.path.join(baseDir, 'rm_occluded', f'mask_{padded_idx}.png'))).copy() / 255
 
-                batch.o.append(np.repeat(c.reshape(1, -1), (mask>0).sum(), axis=0))
-                batch.d.append(dir[mask>0])
-                batch.rgb.append(rgb[mask>0])
-                batch.depth.append(dep[mask>0])
-                batch.gradient.append(gradient[mask>0])
+                rays_train.origin.append(np.repeat(c.reshape(1, -1), (mask>0).sum(), axis=0))
+                rays_train.direction.append(dir[mask>0])
+                rgb_ = rgb[mask>0]
+                rays_train.color.append(rgb_) 
+                rays_train.depth.append(dep[mask>0])
+                rays_train.gradient.append(gradient[mask>0])
 
             elif idx < 110:
-                batch_test.o.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
-                batch_test.d.append(original_coord.reshape(-1, 3))
-                batch_test.rgb.append(np.asarray(Image.open(os.path.join(baseDir, 'test', f'rgb_{str(idx - 100).zfill(3)}.png'))).reshape(-1, 3))
-                batch_test.depth.append(dep.reshape(-1))
+                rays_test.origin.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
+                rays_test.direction.append(original_coord.reshape(-1, 3))
+                rgb_ = np.asarray(Image.open(os.path.join(baseDir, 'test', f'rgb_{str(idx - 100).zfill(3)}.png'))).reshape(-1, 3)
+                rays_test.color.append(rgb_)
+                rays_test.depth.append(dep.reshape(-1))
 
             elif idx == 110:
-                batch_test.o.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
-                batch_test.d.append(coord.reshape(-1, 3))
-                batch_test.rgb.append(rgb.reshape(-1, 3))
-                batch_test.depth.append(dep.reshape(-1))
+                rays_test.origin.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
+                rays_test.direction.append(coord.reshape(-1, 3))
+                rgb_ = rgb.reshape(-1, 3)
+                rays_test.color.append(rgb_)
+                rays_test.depth.append(dep.reshape(-1))
+
+            ts = idx * np.ones((len(rgb_), 1))
+            if idx < 100:
+                rays_train.ts.append(ts)
+            else: 
+                rays_test.ts.append(ts)
 
     # use this function to reduce verbose code
-    batch = concat_all(batch)
-    batch_test = concat_all(batch_test)
+    rays_train = concat_all(rays_train)
+    rays_test = concat_all(rays_test)
 
     # rays_o, rays_d, rays_g, rays_rgb, rays_depth, [H, W]
     # all in flatten format : [N(~H*W*100), 3 or 1]
     
-    return batch, batch_test, H, W
+    return rays_train, rays_test, H, W
 
 
 def load(args):
@@ -188,18 +185,18 @@ def load(args):
     render_poses (41, 4, 4) # full 360 poses 
     hwf (3, ) # height, width, focal = .5 * W / np.tan(.5 * camera_angle_x) 
     i_split (3, None) # imgs indices for train, val, test 
-    bounding_box (2, 3) # pair of 3d coords
+    bbox (2, 3) # pair of 3d coords
 
     """
     print("Data type: Equirectangular")
-    rays, rays_test, h, w = load_equirect_data(args.datadir, args.stage)
+    rays_train, rays_test, h, w = load_equirect_data(args.datadir, args.stage)
     print(f"Loaded equirectangular; h: {h}, w: {w}")
 
     near, far = 0.0, 2.0
     bbox = (torch.tensor([-1.5, -1.5, -1.0]), torch.tensor([1.5, 1.5, 1.0]))
 
     cc = CameraConfig(height=h, width=w, near=near, far=far)
-    dataset = EquirectDataset(cc=cc, rays_train=rays, 
+    dataset = EquirectDataset(cc=cc, rays_train=rays_train, 
                                 rays_test=rays_test, bbox=bbox)
         
     print("Camera Config:")
