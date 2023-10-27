@@ -1,14 +1,15 @@
 import json 
 import os 
 import torch
+import numpy as np
+import pdb
+import traceback 
 
 from radam import RAdam
-from util.rays import *
 from load_data import load
 from embedders import get_embedders
 from networks import get_networks
-
-from util.util import *
+from util.util import create_expname, save_configs
 from parse_args import config_parser
 
 from trainer import Trainer 
@@ -102,7 +103,7 @@ def main():
     """
     5. Create optimizer
     """
-    if args.i_embed == "hash":
+    if embedder_config["xyz"]["type"] == "hash":
         print("Optimizer: RAdam")
         optimizer = \
             RAdam([
@@ -184,4 +185,9 @@ if __name__ == '__main__':
     if args.seed is not None:
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
-    main()
+
+    try:
+        main()
+    except Exception as e:
+        traceback.print_exc()
+        pdb.post_mortem()

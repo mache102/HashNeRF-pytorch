@@ -1,15 +1,15 @@
 import argparse
 import torch
 import numpy as np
+import os 
 import imageio
 
 from dataclasses import dataclass 
 from tqdm import trange, tqdm 
 
 from load_data import EquirectDataset
-from renderer import VolumetricRenderer, prepare_rays
-from util.rays import * 
-from util.util import *
+from renderer import VolumetricRenderer
+from util.util import all_to_tensor, save_imgs, shuffle_rays
 from util.math import to_8b, img2mse, mse2psnr
 
 @dataclass 
@@ -38,7 +38,7 @@ class Trainer():
         self.usage = usage
 
         self.unpack_dataset(dataset)
-        self.volren = VolumetricRenderer(cc=self.cc, models=models,
+        self.volren = VolumetricRenderer(models=models,
                                          embedders=embedders,
                                          usage=usage, args=args)
 
@@ -62,11 +62,10 @@ class Trainer():
         """
         unpack train&test rays, bbox, and camera config
         """
+        self.cc = dataset.cc
         self.rays_train = shuffle_rays(all_to_tensor(dataset.rays_train, device))
         self.rays_test = all_to_tensor(dataset.rays_test, device)
         self.bbox = dataset.bbox
-
-        self.unpack_cc(dataset.cc)
 
     def fit(self):
         """
@@ -94,7 +93,7 @@ class Trainer():
             if iteration % self.args.iter_ckpt == 0:
                 self.save_ckpt()
 
-            if iteration % self.args.iter_test == 0 and iter > 0:
+            if iteration % self.args.iter_test == 0 and iteration > 0:
                 if self.args.stage > 0:
                     test_fp = os.path.join(self.savepath, 'stage{}_test_{:06d}'.format(self.args.stage, iteration))
                 else:
@@ -125,7 +124,7 @@ class Trainer():
 
         if self.usage["dir"]:
             dir = dir / torch.norm(dir, dim=-1, keepdim=True)
-            rays = torch.cat([rays, dir[:, None]], -1)
+            rays = torch.cat([rays, dir], -1)
    
         rays = torch.cat([rays, self.rays_train.ts[start:end]], -1)
 
@@ -133,9 +132,12 @@ class Trainer():
             return rays
 
         gradient = self.rays_train.gradient[start:end] if self.usage["gradient"] else None
-        targets = TargetBatch(color=self.rays_train.color[start:end],
-                              depth=self.rays_train.depth[start:end],
-                              gradient=gradient)
+        targets = {
+            "color": self.rays_train.color[start:end],
+            "depth": self.rays_train.depth[start:end],
+            "gradient": gradient,
+        }
+    
         return rays, targets
 
     def calc_loss(self, outputs, targets):
@@ -143,33 +145,33 @@ class Trainer():
 
         loss_dict = {}
         if self.args.N_fine > 0:
-            loss_dict['color'] = img2mse(outputs["fine_color"], targets.color)
+            loss_dict['color'] = img2mse(outputs["fine_color"], targets["color"])
             psnr = mse2psnr(loss_dict['color'])
 
             if self.usage["depth"]:
-                loss_dict['depth'] = torch.abs(outputs["fine_depth"] - targets.depth).mean() 
-                loss_dict['depth_'] = torch.abs(outputs["coarse_depth"], targets.depth).mean()
+                loss_dict['depth'] = torch.abs(outputs["fine_depth"] - targets["depth"]).mean() 
+                loss_dict['depth_'] = torch.abs(outputs["coarse_depth"], targets["depth"]).mean()
 
             if self.usage["gradient"]:
-                loss_dict['gradient'] = img2mse(outputs["fine_gradient"], targets.gradient)
-                loss_dict['gradient_'] = img2mse(outputs["coarse_gradient"], targets.gradient)
+                loss_dict['gradient'] = img2mse(outputs["fine_gradient"], targets["gradient"])
+                loss_dict['gradient_'] = img2mse(outputs["coarse_gradient"], targets["gradient"])
         
         else:
-            loss_dict['color'] = img2mse(outputs["coarse_color"], targets.color)
+            loss_dict['color'] = img2mse(outputs["coarse_color"], targets["color"])
             psnr = mse2psnr(loss_dict['color'])
 
             if self.usage["depth"]:
-                loss_dict['depth'] = torch.abs(outputs["coarse_depth"], targets.depth).mean()
+                loss_dict['depth'] = torch.abs(outputs["coarse_depth"], targets["depth"]).mean()
 
             if self.usage["gradient"]:
-                loss_dict['gradient'] = img2mse(outputs["coarse_gradient"], targets.gradient)
+                loss_dict['gradient'] = img2mse(outputs["coarse_gradient"], targets["gradient"])
                
         loss = sum(loss_dict.values())
 
-        sparsity_loss = self.args.sparse_loss_weight \
-            * (outputs["coarse_sparsity_loss"].sum() \
-            + outputs.get("fine_sparsity_loss", torch.tensor(0)).sum())
-        loss += sparsity_loss
+        # sparsity_loss = self.args.sparse_loss_weight \
+        #     * (outputs["coarse_sparsity_loss"].sum() \
+        #     + outputs.get("fine_sparsity_loss", torch.tensor(0)).sum())
+        # loss += sparsity_loss
 
 
         loss.backward()
@@ -211,8 +213,7 @@ class Trainer():
         """
         os.makedirs(test_fp, exist_ok=True)
         with torch.no_grad():
-            rgbs, _ = self.render_save(self.rays_test.origin, self.rays_test.direction, 
-                                        savepath=test_fp)
+            rgbs, _ = self.render_save(self.rays_test.origin, savepath=test_fp)
         print('Done rendering', test_fp)
 
         # calculate MSE and PSNR for last image(gt pose)
@@ -226,7 +227,7 @@ class Trainer():
         imageio.mimwrite(os.path.join(test_fp, 'video2.gif'), to_8b(rgbs), duration=1000//10)
         print('Saved test set')   
 
-    def render_save(self, rays_o, rays_d, savepath):
+    def render_save(self, rays_o, savepath):
         """
         Render to save path
 
@@ -235,11 +236,8 @@ class Trainer():
         rgbs = []
         depths = []
 
-        temp_h = self.h 
-        temp_w = self.w
-
-        h = self.h * self.args.render_factor 
-        w = self.w * self.args.render_factor
+        h = self.cc.height * self.args.render_factor 
+        w = self.cc.width * self.args.render_factor
 
         batch = h * w    
         for idx in trange(rays_o.shape[0] // batch):
@@ -247,7 +245,7 @@ class Trainer():
 
             rays = self.get_batch(start, step=batch, get_target=False)
 
-            outputs = self.render(rays=rays)
+            outputs = self.volren.render(rays=rays)
             prefix = "fine" if self.args.N_fine > 0 else "coarse"
             rgb, depth = outputs[f"{prefix}_color"], outputs[f"{prefix}_depth"]
 
@@ -261,10 +259,6 @@ class Trainer():
 
             if savepath is not None:
                 save_imgs(rgb, depth, idx, savepath)
-
-        # revert the height and width after rendering
-        self.volren.h = temp_h 
-        self.volren.w = temp_w
 
         rgbs = np.stack(rgbs, 0)
         depths = np.stack(depths, 0)

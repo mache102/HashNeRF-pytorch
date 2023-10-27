@@ -13,12 +13,8 @@ import requests
 import re
 import json
 
-from tqdm import trange
-
 from Panorama.pn_retriever import get_panorama
 from Panorama.pn_crop import crop_pano
-
-from recursive_pp import *
 
 def get_pano_id(url):
     """

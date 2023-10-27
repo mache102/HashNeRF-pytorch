@@ -22,8 +22,7 @@ class RayPredictions:
     sparsity_loss: torch.Tensor
 
 class VolumetricRenderer:
-    def __init__(self, cc: CameraConfig, 
-                 models: dict, embedders: dict,
+    def __init__(self, models: dict, embedders: dict,
                  usage: dict, args: argparse.Namespace):
         """
         NeRF volumetric rendering
@@ -42,21 +41,7 @@ class VolumetricRenderer:
         self.embedders = embedders
         self.usage = usage
 
-        self.unpack_cc(cc)
         self.unpack_args(args)
-
-    def unpack_cc(self, cc):
-        """
-        Unpack camera config
-        (height, width, focal,
-        intrinsic matrix, near, far)
-        """
-        self.h = cc.height
-        self.w = cc.width
-        self.focal = cc.focal
-        self.k = cc.k
-        self.near = cc.near
-        self.far = cc.far
 
     def unpack_args(self, args):
         """
@@ -76,9 +61,7 @@ class VolumetricRenderer:
         perturb: 0 for uniform sampling, 1 for jittered (stratified rand points) sampling
         N_coarse: num of coarse samples per ray
         N_fine: num of additional fine samples per ray
-        white_bkgd: whether to assume white background
         raw_noise_std: std dev of noise added to regularize sigma_a output, 1e0 recommended
-        lindisp: If True, sample linearly in inverse depth rather than in depth.
         """
         self.seed = args.seed 
         self.render_bsz = args.render_bsz
@@ -86,9 +69,7 @@ class VolumetricRenderer:
         self.perturb = args.perturb
         self.N_coarse = args.N_coarse 
         self.N_fine = args.N_fine 
-        self.white_bkgd = args.white_bkgd
         self.raw_noise_std = args.raw_noise_std 
-        self.lindisp = args.lindisp
 
         self.bbox = args.bbox
 
@@ -114,9 +95,9 @@ class VolumetricRenderer:
         total_rays = rays.shape[0]
 
         outputs = defaultdict(list)
-        for i in range(0, total_rays, self.bsz):
+        for i in range(0, total_rays, self.render_bsz):
             # (render_bsz, ?)
-            batch_output = self.batch_render(rays[i:i + self.bsz], **kwargs)
+            batch_output = self.render_batch(rays[i:i + self.render_bsz], **kwargs)
             for k, v in batch_output.items():
                 outputs[k] += [v]           
 
@@ -131,7 +112,7 @@ class VolumetricRenderer:
         """
         pos_ = inputs["pos"] # use this for reshaping (second to last line)
         pos = pos_.reshape(-1, pos_.shape[-1])
-        pos_embed, = self.embedders["pos"](pos)
+        pos_embed = self.embedders["xyz"](pos)
 
         if inputs.get("dir") is not None:
             dir = inputs["dir"]
@@ -197,11 +178,7 @@ class VolumetricRenderer:
 
         # prepare for sampling
         t_vals = torch.linspace(0., 1., steps=self.N_coarse)
-        if not self.lindisp:
-            z_vals = near * (1. - t_vals) + far * (t_vals)
-        else:
-            z_vals = 1. / (1. / near * (1. - t_vals) + 1. / far * (t_vals))
-
+        z_vals = near * (1. - t_vals) + far * (t_vals)
         z_vals = z_vals.expand([N_rays, self.N_coarse])
 
         if perturb > 0.:
@@ -221,7 +198,7 @@ class VolumetricRenderer:
                                model_name="coarse")
         coarse_out = self.raw2outputs(raw, z_vals, rays_d, 
                                         raw_noise_std=raw_noise_std)
-        weights = coarse_out.weights
+        weights = coarse_out["weights"]
 
         if self.N_fine > 0:
             z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
@@ -293,9 +270,7 @@ class VolumetricRenderer:
         depth = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
         # disparity = 1./torch.max(1e-10 * torch.ones_like(depth), depth)
         opacity = torch.sum(weights, -1)
-        
-        if self.white_bkgd:
-            color = color + (1. - opacity[...,None])
+
 
         # Calculate weights sparsity loss
         try:

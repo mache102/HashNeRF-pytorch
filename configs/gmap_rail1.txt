@@ -2,18 +2,14 @@
 expname = gmap_rail1
 basedir = ./logs
 datadir = ./data/gmap_rail1
-dataset_type = equirect
 
 train_bsz = 1400
 N_coarse = 64
 N_fine = 128
 
-use_viewdirs = True
 raw_noise_std = 1e0
-
-multires = 10
-multires_views = 4
-
 stage = 0
+
+use_viewdirs = True
 use_gradient = False
 use_depth = False

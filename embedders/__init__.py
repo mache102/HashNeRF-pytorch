@@ -50,7 +50,7 @@ def get_embedder(config, bbox=None):
                             log2_hashmap_size=config["log2_hashmap_size"], \
                             base_resolution=config["base_resolution"], \
                             finest_resolution=config["finest_resolution"], \
-                            bounding_box=bbox)
+                            bbox=bbox)
     elif name == "sh":
         embedder = SHEncoder()
     elif name == "linear": # linear embedding (is there a better name?)
