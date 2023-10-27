@@ -12,16 +12,6 @@ from renderer import VolumetricRenderer
 from util.util import all_to_tensor, save_imgs, shuffle_rays
 from util.math import to_8b, img2mse, mse2psnr
 
-@dataclass 
-class RayBatch:
-    origins: torch.Tensor # (render_bsz, 3)
-    directions: torch.Tensor # (render_bsz, 1)
-
-@dataclass 
-class TargetBatch:
-    color: torch.Tensor # (render_bsz, 3)
-    depth: torch.Tensor # (render_bsz, 1)
-    gradient: torch.Tensor = None # (render_bsz, 1)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 

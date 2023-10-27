@@ -136,8 +136,7 @@ class VolumetricRenderer:
         outputs = torch.reshape(outputs, list(pos_.shape[:-1]) + [outputs.shape[-1]])
         return outputs
     
-    def render_batch(self, rays,
-                     retraw=False, test=False):
+    def render_batch(self, rays, test=False):
         """
         Volumetric rendering for a single batch.
 
@@ -224,8 +223,6 @@ class VolumetricRenderer:
         if self.N_fine > 0:
             for k in fine_out:
                 ret[f"fine_{k}"] = fine_out[k]
-        if retraw:
-            ret['raw'] = raw
         return ret
 
     def raw2outputs(self, raw, z_vals, rays_d, raw_noise_std):
