@@ -98,16 +98,21 @@ class Trainer():
             self.global_step += 1
 
 
-    def get_batch(self, start, step, get_target=True):
+    def get_batch(self, start, step, test_mode=False):
         """
         Retrieve a batch of rays (self.train_bsz)
         for training 
         """
+        if test_mode == False:
+            ray_bundle = self.rays_train 
+        else:
+            ray_bundle = self.rays_test
+
         end = start + step   
-        dir = self.rays_train.direction[start:end]
+        dir = ray_bundle.direction[start:end]
 
         # (train_bsz, 3+3+1+1)
-        rays = torch.cat([self.rays_train.origin[start:end], 
+        rays = torch.cat([ray_bundle.origin[start:end], 
                           dir,
                           torch.full((step, 1), self.cc.near),
                           torch.full((step, 1), self.cc.far)], -1)
@@ -116,15 +121,15 @@ class Trainer():
             dir = dir / torch.norm(dir, dim=-1, keepdim=True)
             rays = torch.cat([rays, dir], -1)
    
-        rays = torch.cat([rays, self.rays_train.ts[start:end]], -1)
+        rays = torch.cat([rays, ray_bundle.ts[start:end]], -1)
 
-        if not get_target:
+        if test_mode:
             return rays
 
-        gradient = self.rays_train.gradient[start:end] if self.usage["gradient"] else None
+        gradient = ray_bundle.gradient[start:end] if self.usage["gradient"] else None
         targets = {
-            "color": self.rays_train.color[start:end],
-            "depth": self.rays_train.depth[start:end],
+            "color": ray_bundle.color[start:end],
+            "depth": ray_bundle.depth[start:end],
             "gradient": gradient,
         }
     
