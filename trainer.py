@@ -238,7 +238,7 @@ class Trainer():
         for idx in trange(rays_o.shape[0] // batch):
             start = idx * batch
 
-            rays = self.get_batch(start, step=batch, get_target=False)
+            rays = self.get_batch(start, step=batch, test_mode=True)
 
             outputs = self.volren.render(rays=rays)
             prefix = "fine" if self.args.N_fine > 0 else "coarse"
