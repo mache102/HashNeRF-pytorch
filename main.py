@@ -11,8 +11,7 @@ from load_data import load_data
 from util import *
 from parse_args import config_parser
 
-from trainer import EquirectTrainer 
-from trainers.standard import StandardTrainer
+from trainer import Trainer 
 
 # 20231010 15:25
   

@@ -13,7 +13,7 @@ from util import *
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-class EquirectTrainer():
+class Trainer():
     def __init__(self, dataset: EquirectDataset, models: dict, 
                  optimizer: torch.optim.Optimizer,
                  embedders: dict, args: argparse.Namespace):
@@ -73,7 +73,7 @@ class EquirectTrainer():
 
             # optimize
             rays, reshape_to = prepare_rays(self.cc, rays=[batch["o"], batch["d"]], 
-                                            ndc=False, use_viewdirs=self.args.use_viewdirs)
+                                            use_viewdirs=self.args.use_viewdirs)
             preds, extras = self.volren.render(rays=rays, reshape_to=reshape_to)
             loss, psnr, psnr_0 = self.calc_loss(preds, targets, extras)
             self.update_lr()
@@ -221,7 +221,7 @@ class EquirectTrainer():
             end = (idx + 1) * batch
             rays, reshape_to = \
                 prepare_rays(self.cc, rays=[rays_o[start:end], rays_d[start:end]], 
-                             ndc=False, use_viewdirs=self.args.use_viewdirs)
+                             use_viewdirs=self.args.use_viewdirs)
             # print(rays.shape)
             preds, _ = \
                 self.volren.render(rays=rays, reshape_to=reshape_to)

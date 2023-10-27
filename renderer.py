@@ -457,9 +457,7 @@ if __name__ == '__main__':
 
 
 def prepare_rays(cc: CameraConfig, 
-                rays = None, c2w = None,
-                c2w_staticcam = None, ndc: bool = False, 
-                use_viewdirs: bool = False):
+                rays = None, use_viewdirs: bool = False):
     """
     Prepare rays for rendering in batches
 
@@ -467,22 +465,13 @@ def prepare_rays(cc: CameraConfig,
         rays: (N, 8) or (N, 11) if use_viewdirs
         reshape_to: shape of rays_d before flattening
     """
-    if c2w is not None:
-        # special case to render full image
-        rays_o, rays_d = get_rays(cc.height, cc.width, c2w, 
-                                  focal=cc.focal, K=cc.k)
-    else:
-        # use provided ray batch
-        rays_o, rays_d = rays
+    rays_o, rays_d = rays
 
     # use viewdirs (rays_d)
     if use_viewdirs:
         # provide ray directions as input
         viewdirs = rays_d
-        if c2w_staticcam is not None:
-            # special case to visualize effect of viewdirs
-            rays_o, rays_d = get_rays(cc.height, cc.width, 
-                                      c2w_staticcam, focal=cc.focal, K=cc.k)
+
         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
         viewdirs = viewdirs.reshape(-1,3).float()
 
@@ -492,9 +481,6 @@ def prepare_rays(cc: CameraConfig,
     # [..., 3]
     reshape_to = list(rays_d.shape[:-1])
     # normalized device coordinates, for forward facing scenes
-    if ndc:
-        rays_o, rays_d = get_ndc_rays(cc.height, cc.width, focal=cc.k[0][0], 
-                                        near=1., rays_o=rays_o, rays_d=rays_d)
 
     # Create ray batch
     # (N, 3)
