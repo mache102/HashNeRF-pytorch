@@ -66,7 +66,7 @@ def rotate_pixel(coord, R, w, h):
 
 def main():
     os.makedirs(os.path.join(args.save_path, "calibrated"), exist_ok=True)
-    panos = [fn for fn in os.listdir(args.file_path) if fn.startswith("p_")]
+    panos = [fn for fn in os.listdir(args.file_path, "raw") if fn.startswith("p_")]
     panos.sort()
 
     cams = np.loadtxt(os.path.join(args.file_path, "cams.txt"), delimiter=" ")
@@ -108,12 +108,6 @@ def main():
         cv2.imwrite(os.path.join(args.file_path, "calibrated", fn), 
                     cv2.cvtColor(warped_img, cv2.COLOR_RGB2BGR))
         
-        # show old and new img 
-        # plt.subplot(1, 2, 1)
-        # plt.imshow(img)
-        # plt.subplot(1, 2, 2)
-        # plt.imshow(warped_img)
-        # plt.show()
 
 
 if __name__ == '__main__':

@@ -60,8 +60,8 @@ def process_pano(pano, idx):
 
     depth_map = get_depth_map(pano.pano_id)
     depth_map = cv2.resize(depth_map, np.array(pano_img).shape[:2][::-1], interpolation=cv2.INTER_CUBIC)
-    depth_map = np.nan_to_num(depth_map, nan=10 * np.nanmax(depth_map))
-    depth_map = depth_map.astype(np.float32)
+    # depth_map = np.nan_to_num(depth_map, nan=10 * np.nanmax(depth_map))
+    # depth_map = depth_map.astype(np.float32)
     fn = f"d_{str(idx).zfill(4)}"
     # save depth map as np array instead 
     np.save(os.path.join(args.save_path, "depth", fn), depth_map)
