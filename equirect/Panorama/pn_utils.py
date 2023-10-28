@@ -1,5 +1,7 @@
 import os 
 import re
+import requests 
+import json
 
 from dataclasses import dataclass 
 from typing import Optional, Tuple
@@ -68,3 +70,31 @@ def pn_fn_extractor(fn: str, is_basename: bool = False) -> PanoramaInfo:
                         date=date, 
                         zoom=zoom,
                         offset=offset)
+
+
+def get_metadata(pano_id):
+    """
+    Retrieve the metadata associated with a given panorama id.
+    WARNING: returned results may be lengthy
+    """
+    endpoint = 'https://www.google.com/maps/photometa/v1'
+
+    # Set API parameters
+    params = {
+        'authuser': '0',
+        'hl': 'en',
+        'gl': 'us',
+        'pb': f'!1m4!1smaps_sv.tactile!11m2!2m1!1b1!2m2!1sen!2suk!3m3!1m2!1e2!2s{pano_id}!4m57!1e1!1e2!1e3!1e4!1e5!1e6!1e8!1e12!2m1!1e1!4m1!1i48!5m1!1e1!5m1!1e2!6m1!1e1!6m1!1e2!9m36!1m3!1e2!2b1!3e2!1m3!1e2!2b0!3e3!1m3!1e3!2b1!3e2!1m3!1e3!2b0!3e3!1m3!1e8!2b0!3e3!1m3!1e1!2b0!3e3!1m3!1e4!2b0!3e3!1m3!1e10!2b1!3e2!1m3!1e10!2b0!3e3'
+    }
+
+    # Send GET request to API endpoint and retrieve response
+    response = requests.get(endpoint, params=params, proxies=None)
+    # response = requests.get(endpoint)
+
+    # Extract image and depth map from response
+    # print(response.links)
+    response = response.content
+    # print(len(response))
+    
+    response = json.loads(response[4:])
+    return response

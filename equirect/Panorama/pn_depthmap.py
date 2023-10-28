@@ -5,16 +5,14 @@ import asyncio
 import base64
 # import cv2
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import numpy as np
 import struct
-import matplotlib.pyplot as plt
 import requests
 import re
 import json
 
-from Panorama.pn_retriever import get_panorama
-from Panorama.pn_crop import crop_pano
+from .pn_retriever import get_panorama
+from .pn_crop import crop_pano
 
 def get_pano_id(url):
     """
@@ -49,7 +47,7 @@ def get_depth_map(pano_id):
     # Extract image and depth map from response
     # print(response.links)
     response = response.content
-    print(len(response))
+    # print(len(response))
     
     response = json.loads(response[4:])
     # recursive_pretty_print(response, name="x", max_len = 16) 
