@@ -125,20 +125,21 @@ def main():
     r = 30
     pano_ids = np.array(list(all_panos.keys()))
     close_idx = np.where(np.linalg.norm(norm_coords, axis=1) < r)[0]
-    pano_ids = pano_ids[close_idx]
+    pano_ids = pano_ids
 
     proc = ProcessImage(headings=angles[:, 0])
 
-    for i in trange(len(pano_ids)):
-        id = pano_ids[i]
+    for i in trange(len(close_idx)):
+        real_idx = close_idx[i]
+        id = pano_ids[real_idx]
         pano = all_panos[id]
         if pano[-1] is None:
             if args.ignore_nodate:
                 continue
             else:
-                proc.pano(id, i)
+                proc.pano(id, real_idx)
         elif pano[-1] > args.min_date:
-            proc.pano(id, i)
+            proc.pano(id, real_idx)
 
 if __name__ == '__main__':
     args = parse_args()
