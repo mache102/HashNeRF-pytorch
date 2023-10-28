@@ -4,7 +4,10 @@ This program does not generate equirectangular data for nerfs.
 
 example:
 
-python3 -m equirect.get_data --url "https://www.google.com/maps/@37.4237922,-121.8896494,19.31z?entry=ttu" --save_path imgs/
+python3 -m equirect.get_data --url "https://www.google.com/maps/@37.3420419,-121.8948427" --save_path imgs/
+
+
+python3 -m equirect.get_data --url "https://www.google.com/maps/@37.342413,-121.8952678,21z?entry=ttu" --url2 "https://www.google.com/maps/@37.3417396,-121.8947369,21z?entry=ttu" --save_path imgs/
 """
 import argparse
 import numpy as np
@@ -56,7 +59,7 @@ def get_relative_dists(coord0, coord1):
 def process_pano(pano, idx):
     pano_img = asyncio.run(get_panorama(pano.pano_id, zoom=1))
     fn = f"p_{str(idx).zfill(4)}.png"
-    pano_img.save(os.path.join(args.save_path, "raw", fn))
+    pano_img.save(os.path.join(args.save_path, "color", fn))
 
     depth_map = get_depth_map(pano.pano_id)
     depth_map = cv2.resize(depth_map, np.array(pano_img).shape[:2][::-1], interpolation=cv2.INTER_CUBIC)
@@ -68,7 +71,7 @@ def process_pano(pano, idx):
 
 def main():
 
-    os.makedirs(os.path.join(args.save_path, "raw"), exist_ok=True)
+    os.makedirs(os.path.join(args.save_path, "color"), exist_ok=True)
     os.makedirs(os.path.join(args.save_path, "depth"), exist_ok=True)
     panos = search_panoramas(args.coord)
     # sort by offset (distance from search point)

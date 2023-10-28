@@ -5,17 +5,18 @@ import os
 import math
 import cv2
 
+from tqdm import trange 
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 
 @dataclass
-class EquirectRays:
+class RayBundle:
     origin: List[any] = field(default_factory=list)
     direction: List[any] = field(default_factory=list)
     color: List[any] = field(default_factory=list)
     depth: List[any] = field(default_factory=list)
-    gradient: Optional[List[any]] = None  # gradient (not present in the test set)
-    ts: List[any] = field(default_factory=list) # idx emebed
+    gradient: List[any] = field(default_factory=list) # gradient (not present in the test set)
+    embed: List[any] = field(default_factory=list) # idx embed for appearance, transience, etc
 
 @dataclass
 class CameraConfig:
@@ -37,8 +38,8 @@ class CameraConfig:
 @dataclass 
 class EquirectDataset:
     cc: CameraConfig
-    rays_train: EquirectRays
-    rays_test: EquirectRays
+    rays_train: RayBundle
+    rays_test: RayBundle
     bbox: Tuple[torch.Tensor, torch.Tensor] 
 
 def concat_all(batch):
@@ -46,26 +47,126 @@ def concat_all(batch):
     Iterate over the batch and concatenate all the lists
     """
     for key, value in batch.__dict__.items():
-        if value is not None:
+        if value is not None and not isinstance(value, np.ndarray):
+            # also skip if already concatenated
             batch.__dict__[key] = np.concatenate(value, axis=0)
 
     return batch
 
-def load_equirect_data(baseDir: str, stage=0):
+def make_direction_rays(h, w):
+    """
+    Ray directions for equirectangular images
+    ~= unit sphere
+    """
+    y = np.repeat(np.array(range(w)).reshape(1,w), h, axis=0)
+    x = np.repeat(np.array(range(h)).reshape(1,h), w, axis=0).T
 
-    basename = baseDir.split('/')[-1]+'_'
-    rgb = np.asarray(Image.open(os.path.join(baseDir, basename+'rgb.png'))) / 255.0
+    lat = (1 - 2 * x / h) * np.pi / 2 # theta
+    lon = 2 * np.pi * (0.5 - (y) / w) # phi
+
+    x = np.cos(lat) * np.cos(lon)
+    y = np.cos(lat) * np.sin(lon)
+    z = np.sin(lat)
+    directions = np.stack((x, y, z), axis=2) # (h, w, 3)
+    return directions 
+
+def load_equirect_data(path: str, shape: Tuple[int, int], 
+                       n_test_imgs: int = 10, seed: int = 0):
+    h, w = shape
+    rays_train = RayBundle()
+    rays_test = RayBundle()
+
+    color_path = os.path.join(path, "color")
+
+    # use calibrated
+    img_fns = sorted([fn for fn in os.listdir(color_path) if fn.startswith("p_")])
+    n_imgs = len(img_fns) 
+    assert n_imgs > n_test_imgs, "Not enough images for testing"
+    idxs = np.arange(n_imgs)
+    np.random.seed(seed)
+    np.random.shuffle(idxs)
+    test_idxs = idxs[:n_test_imgs]
+    train_idxs = idxs[n_test_imgs:]
+    n_train_imgs = len(train_idxs)
+
+    cams = np.loadtxt(os.path.join(path, "cams.txt"), delimiter=" ")
+    cams = np.insert(cams, 1, 0, axis=1)
+
+    # prep directions in advance as they are the same for all images
+    directions = make_direction_rays(h, w).reshape(-1, 3) # (h*w, 3)
+    # (h*w*n_train_imgs, 3) and (h*w*n_test_imgs, 3)
+    rays_train.directions = np.repeat(directions, len(train_idxs), axis=0)
+    rays_test.directions = np.repeat(directions, len(test_idxs), axis=0)
+
+    # same goes for embeds 
+    # see https://github.com/kwea123/nerf_pl/blob/nerfw/datasets/blender.py
+    # the embed is initialized by frame/camera idx
+    # (rays_o) is the img, len is constant in our case 
+    # for t, frame in enumerate(self.meta['frames']):
+    #     ...
+    #     rays_t = t * torch.ones(len(rays_o), 1)
+    rays_train.embed = np.concatenate([i * np.ones((h*w, 1)) for i in range(n_train_imgs)], axis=0)
+    rays_test.embed = np.concatenate([i * np.ones((h*w, 1)) for i in range(n_test_imgs)], axis=0)
+
+    print("Loading training data")
+    for idx in trange(len(train_idxs)):
+        fn = img_fns[train_idxs[idx]]
+        origin = cams[train_idxs[idx]] # ray origin / cam pos
+
+        # rgb image
+        img = cv2.imread(os.path.join(color_path, fn), cv2.IMREAD_COLOR)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if img.shape[0] != h or img.shape[1] != w:
+            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
+        img = img.reshape(-1, 3)
+
+        # gradient from rgb image's laplacian
+        gradient = cv2.Laplacian(img, cv2.CV_64F)
+        gradient = 2 * (gradient - np.min(gradient)) / np.ptp(gradient) - 1
+                
+        rays_train.origin.append(np.repeat(origin.reshape(1, -1), h * w, axis=0))
+        rays_train.color.append(img) 
+        rays_train.gradient.append(gradient)
+
+    print("Loading testing data")
+    for idx in trange(len(test_idxs)):
+        fn = img_fns[test_idxs[idx]]
+        origin = cams[test_idxs[idx]] # ray origin / cam pos
+
+        # rgb image
+        img = cv2.imread(os.path.join(color_path, fn), cv2.IMREAD_COLOR)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if img.shape[0] != h or img.shape[1] != w:
+            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
+        img = img.reshape(-1, 3)
+
+        # gradient from rgb image's laplacian
+        gradient = cv2.Laplacian(img, cv2.CV_64F)
+        gradient = 2 * (gradient - np.min(gradient)) / np.ptp(gradient) - 1
+                
+        rays_test.origin.append(np.repeat(origin.reshape(1, -1), h * w, axis=0))
+        rays_test.color.append(img) 
+        rays_test.gradient.append(gradient)
+
+    rays_train = concat_all(rays_train)
+    rays_test = concat_all(rays_test)
+    return rays_train, rays_test, h, w
+
+def load_equirect_data_(save_path: str, stage=0):
+
+    basename = save_path.split('/')[-1]+'_'
+    rgb = np.asarray(Image.open(os.path.join(save_path, basename+'rgb.png'))) / 255.0
     
     # load depth.
     # if using matterport3d dataset, then depth is stored in .exr format
     # else (structured3d), depth is stored in .png format
-    if baseDir.split('/')[-2] == 'mp3d':
-        print(os.path.join(baseDir, basename+'depth.exr'))
-        d = cv2.imread(os.path.join(baseDir, basename+'depth.exr'), cv2.IMREAD_ANYDEPTH)
+    if save_path.split('/')[-2] == 'mp3d':
+        print(os.path.join(save_path, basename+'depth.exr'))
+        d = cv2.imread(os.path.join(save_path, basename+'depth.exr'), cv2.IMREAD_ANYDEPTH)
         d = d.astype(np.float)
 
     else:
-        d = np.asarray(Image.open(os.path.join(baseDir, basename+'d.png')))
+        d = np.asarray(Image.open(os.path.join(save_path, basename+'d.png')))
 
     # gradient is obtained from rgb image's laplacian
     gradient = cv2.Laplacian(rgb, cv2.CV_64F)
@@ -92,13 +193,13 @@ def load_equirect_data(baseDir: str, stage=0):
     # load training camera poses
     # sample item: [x, y, z]
     image_coords = []
-    with open(os.path.join(baseDir, 'cam_pos.txt'),'r') as fp:
+    with open(os.path.join(save_path, 'cam_pos.txt'),'r') as fp:
         all_poses = fp.readlines()
         for p in all_poses:
             image_coords.append(np.array(p.split()).astype(float))
     
     # load testing camera poses
-    with open(os.path.join(baseDir, 'test', 'cam_pos.txt'),'r') as fp:
+    with open(os.path.join(save_path, 'test', 'cam_pos.txt'),'r') as fp:
         all_poses = fp.readlines()
         for p in all_poses:
             image_coords.append(np.array(p.split()).astype(float))
@@ -107,9 +208,9 @@ def load_equirect_data(baseDir: str, stage=0):
     image_coords = np.array(image_coords)
     # image_coords = np.concatenate([image_coords, np.array([0.0, 0.0, 0.0]).reshape(1,3)])
     
-    rays_train = EquirectRays()
+    rays_train = RayBundle()
     rays_train.gradient = []
-    rays_test = EquirectRays()
+    rays_test = RayBundle()
     if stage > 0:
         if stage == 1:
             x, z = coord[..., 0], coord[..., 2]
@@ -139,7 +240,7 @@ def load_equirect_data(baseDir: str, stage=0):
                 
                 # the augmented equirects may have occluded regions
                 # so we mask them out
-                mask = np.asarray(Image.open(os.path.join(baseDir, 'rm_occluded', f'mask_{padded_idx}.png'))).copy() / 255
+                mask = np.asarray(Image.open(os.path.join(save_path, 'rm_occluded', f'mask_{padded_idx}.png'))).copy() / 255
 
                 rays_train.origin.append(np.repeat(c.reshape(1, -1), (mask>0).sum(), axis=0))
                 rays_train.direction.append(dir[mask>0])
@@ -151,7 +252,7 @@ def load_equirect_data(baseDir: str, stage=0):
             elif idx < 110:
                 rays_test.origin.append(np.repeat(c.reshape(1, -1), H*W, axis=0))
                 rays_test.direction.append(original_coord.reshape(-1, 3))
-                rgb_ = np.asarray(Image.open(os.path.join(baseDir, 'test', f'rgb_{str(idx - 100).zfill(3)}.png'))).reshape(-1, 3)
+                rgb_ = np.asarray(Image.open(os.path.join(save_path, 'test', f'rgb_{str(idx - 100).zfill(3)}.png'))).reshape(-1, 3)
                 rays_test.color.append(rgb_)
                 rays_test.depth.append(dep.reshape(-1))
 
@@ -180,16 +281,11 @@ def load_equirect_data(baseDir: str, stage=0):
 
 def load(args):
     """
-    images (samples, H, W, 4) # rgba
-    poses (samples, 4, 4) # frame transformation matrix 
-    render_poses (41, 4, 4) # full 360 poses 
-    hwf (3, ) # height, width, focal = .5 * W / np.tan(.5 * camera_angle_x) 
-    i_split (3, None) # imgs indices for train, val, test 
-    bbox (2, 3) # pair of 3d coords
-
+    origin, direction, color, gradient, embed: (h * w * n_train_imgs, 3)
     """
     print("Data type: Equirectangular")
-    rays_train, rays_test, h, w = load_equirect_data(args.datadir, args.stage)
+    rays_train, rays_test, h, w = load_equirect_data(data_path=args.data_path, shape=args.shape,
+                                                     n_test_imgs=args.n_test_imgs, seed=args.seed)
     print(f"Loaded equirectangular; h: {h}, w: {w}")
 
     near, far = 0.0, 2.0

@@ -1,6 +1,6 @@
 expname = blender_paper_mic
-basedir = ./logs
-datadir = ./data/nerf_synthetic/mic
+save_path = ./logs
+data_path = ./data/nerf_synthetic/mic
 dataset_type = blender
 
 use_viewdirs = True

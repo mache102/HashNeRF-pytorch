@@ -1,20 +1,21 @@
 import configargparse
 
 def config_parser():
-
     parser = configargparse.ArgumentParser()
+    
+    # general options
     parser.add_argument('--config', is_config_file=True,
                         help='config file path')
+    parser.add_argument("--expname", type=str,
+                        help='experiment name')
+    parser.add_argument("--save_path", type=str, default='./logs/',
+                        help='where to store ckpts and logs')
+    parser.add_argument("--data_path", type=str, default='./data/llff/fern',
+                        help='input data directory')
     parser.add_argument("--embed_config", type=str, default="positional",
                         help="filename of embedders config")
     parser.add_argument('--model_config', type=str, default="vanilla_nerf",
                         help='model config name')
-    parser.add_argument("--expname", type=str,
-                        help='experiment name')
-    parser.add_argument("--basedir", type=str, default='./logs/',
-                        help='where to store ckpts and logs')
-    parser.add_argument("--datadir", type=str, default='./data/llff/fern',
-                        help='input data directory')
     parser.add_argument("--seed", type=int, default=None,
                         help='random seed')
 
@@ -35,8 +36,14 @@ def config_parser():
                         help='reload weights from saved ckpt')
     parser.add_argument("--ft_path", type=str, default=None,
                         help='specific weights npy file to reload for coarse network')
+    parser.add_argument("--precrop_iters", type=int, default=0,
+                        help='number of steps to train on central crops')
+    parser.add_argument("--precrop_frac", type=float,
+                        default=.5, help='fraction of img taken for central crops')
 
     # rendering options
+    parser.add_argument("--n_test_imgs", type=int, default=10,
+                        help='number of imgs to render for validation set')
     parser.add_argument("--N_coarse", type=int, default=64,
                         help='number of coarse samples per ray')
     parser.add_argument("--N_fine", type=int, default=0,
@@ -53,25 +60,13 @@ def config_parser():
     parser.add_argument("--render_factor", type=int, default=1,
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
 
-    # training options
-    parser.add_argument("--precrop_iters", type=int, default=0,
-                        help='number of steps to train on central crops')
-    parser.add_argument("--precrop_frac", type=float,
-                        default=.5, help='fraction of img taken for central crops')
-
-    # dataset options
-    parser.add_argument("--testskip", type=int, default=8,
-                        help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
-
+    # usage options
     parser.add_argument("--use_viewdirs", action='store_true',
                         help='use full 5D input instead of 3D')
     parser.add_argument("--use_depth", action='store_true', 
                         help='use depth to update')
     parser.add_argument("--use_gradient", action='store_true', 
                         help='use gradient to update')
-    parser.add_argument("--stage", type=int, default=0,
-                        help='use iterative training by defining stage, if 0: don\'t use')
-
 
     # logging/saving options
     parser.add_argument("--iter_print",   type=int, default=100,
@@ -83,6 +78,7 @@ def config_parser():
     parser.add_argument("--iter_video", type=int, default=5000,
                         help='frequency of render_poses video saving')
 
+    # loss options
     parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
                         help='learning rate')
     parser.add_argument("--tv-loss-weight", type=float, default=1e-6,

@@ -121,7 +121,7 @@ class Trainer():
             dir = dir / torch.norm(dir, dim=-1, keepdim=True)
             rays = torch.cat([rays, dir], -1)
    
-        rays = torch.cat([rays, ray_bundle.ts[start:end]], -1)
+        rays = torch.cat([rays, ray_bundle.embed[start:end]], -1)
 
         if test_mode:
             return rays
@@ -167,7 +167,6 @@ class Trainer():
         #     * (outputs["coarse_sparsity_loss"].sum() \
         #     + outputs.get("fine_sparsity_loss", torch.tensor(0)).sum())
         # loss += sparsity_loss
-
 
         loss.backward()
         self.optimizer.step()

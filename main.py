@@ -38,7 +38,7 @@ def main():
     """
     # Create log dir and copy the config file
     args.expname = create_expname(args)
-    args.savepath = os.path.join(args.basedir, args.expname)
+    args.savepath = os.path.join(args.save_path, args.expname)
     print(f"Experiment name: {args.expname}\n"
           f"Save path: {args.savepath}")
     os.makedirs(args.savepath, exist_ok=True)

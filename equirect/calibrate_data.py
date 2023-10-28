@@ -65,9 +65,10 @@ def rotate_pixel(coord, R, w, h):
     return coord_rot
 
 def main():
-    os.makedirs(os.path.join(args.save_path, "calibrated"), exist_ok=True)
-    panos = [fn for fn in os.listdir(args.file_path, "raw") if fn.startswith("p_")]
-    panos.sort()
+    color_path = os.path.join(args.file_path, "color")
+    depth_path = os.path.join(args.file_path, "depth")
+    panos = sorted([fn for fn in os.listdir(color_path) if fn.startswith("p_")])
+    depths = sorted([fn for fn in os.listdir(depth_path) if fn.startswith("d_")])
 
     cams = np.loadtxt(os.path.join(args.file_path, "cams.txt"), delimiter=" ")
     for idx in range(len(panos)): 
@@ -76,14 +77,14 @@ def main():
         num = int(num_str)
         print(f"pano {num}")
 
-        img = cv2.imread(os.path.join(args.file_path, panos[idx]), cv2.IMREAD_COLOR)
+        img = cv2.imread(os.path.join(color_path, panos[idx]), cv2.IMREAD_COLOR)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = crop_pano(img) # some panoramas have repetitive vertical strips of panorama data on the right
         h, w, _ = img.shape
-        warped_img = np.empty((h, w, 3), dtype=np.uint8)
+
+        depth = np.load(os.path.join(depth_path, depths[idx]))
 
         cam = cams[num]
-
         pitch, roll = cam[3], cam[4]
         pitch = np.deg2rad(90 - pitch)
         roll = np.deg2rad(0 - roll)
@@ -94,6 +95,7 @@ def main():
         # ~12 seconds for a 512x1024 image, 40~50 it/s
         # = ~5 min for 25 imgs
         # consider optimizing?
+        warp_pixel_arr = np.zeros((h*w, ), dtype=np.int32)
         for i in trange(h):
             for j in range(w):
                 # inverse warp a pixel
@@ -101,13 +103,18 @@ def main():
                 i_ = int(vec_pixel[0])
                 j_ = int(vec_pixel[1])
                 if((i_ >= 0) and (j_ >= 0) and (i_ < h) and (j_ < w)):
-                    warped_img[i, j, :] = img[i_, j_, :]
+                    warp_pixel_arr[i*w + j] = i_*w + j_
+                    # warped_img[i, j, :] = img[i_, j_, :]
+
+        warped_img = img.reshape(-1, 3)[warp_pixel_arr].reshape(h, w, 3)
+        warped_depth = depth.flatten()[warp_pixel_arr].reshape(h, w)
         
         # save to args.file_path, pcal_xxxx.png
         fn = f"pcal_{num_str}.png"
-        cv2.imwrite(os.path.join(args.file_path, "calibrated", fn), 
+        cv2.imwrite(os.path.join(color_path, fn), 
                     cv2.cvtColor(warped_img, cv2.COLOR_RGB2BGR))
-        
+        fn = f"dcal_{num_str}.npy"
+        np.save(os.path.join(depth_path, fn), warped_depth)
 
 
 if __name__ == '__main__':

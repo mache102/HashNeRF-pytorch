@@ -1,6 +1,6 @@
 expname = blender_paper_lego
-basedir = ./logs
-datadir = ./data/nerf_synthetic/lego
+save_path = ./logs
+data_path = ./data/nerf_synthetic/lego
 dataset_type = blender
 
 use_viewdirs = True

@@ -1,6 +1,6 @@
 expname = blender_materials
-basedir = ./logs
-datadir = ./data/nerf_synthetic/materials
+save_path = ./logs
+data_path = ./data/nerf_synthetic/materials
 dataset_type = blender
 
 use_viewdirs = True

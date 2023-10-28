@@ -3,8 +3,9 @@ Given a maps url or location, retrieve nearby panoramas and save them to a direc
 This program does not generate equirectangular data for nerfs.
 
 example:
+python3 -m equirect.plot_coords --url "https://www.google.com/maps/@37.3420419,-121.8948427,19.31z?entry=ttu" --file_path imgs/
 
-python3 -m equirect.plot_coords --url "https://www.google.com/maps/@37.4237922,-121.8896494,19.31z?entry=ttu" --file_path imgs/
+python3 -m equirect.plot_coords --url "https://www.google.com/maps/@37.342413,-121.8952678,21z?entry=ttu" --file_path gsvdata/
 """
 import argparse
 import numpy as np
@@ -28,7 +29,7 @@ def parse_args():
 def main():
     cams = np.loadtxt(os.path.join(args.file_path, "cams.txt"), delimiter=" ")
     coords, headings = cams[:, 0:2], cams[:, 2]
-    headings = np.deg2rad(headings) 
+    coords = coords[np.linalg.norm(coords, axis=1) < 30]
     unit_vecs = np.stack([np.cos(headings), np.sin(headings)], axis=1)
 
     plt.figure(figsize=(10, 10))

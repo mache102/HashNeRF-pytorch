@@ -1,6 +1,6 @@
 expname = blender_paper_ficus
-basedir = ./logs
-datadir = ./data/nerf_synthetic/ficus
+save_path = ./logs
+data_path = ./data/nerf_synthetic/ficus
 dataset_type = blender
 
 use_viewdirs = True

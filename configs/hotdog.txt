@@ -1,6 +1,6 @@
 expname = blender_hotdog
-basedir = ./logs
-datadir = ./data/nerf_synthetic/hotdog
+save_path = ./logs
+data_path = ./data/nerf_synthetic/hotdog
 dataset_type = blender
 
 use_viewdirs = True

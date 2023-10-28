@@ -1,6 +1,6 @@
 expname = scannet_scene0000_00
-basedir = ./logs
-datadir = /work/yashsb/datasets/ScanNet/
+save_path = ./logs
+data_path = /work/yashsb/datasets/ScanNet/
 dataset_type = scannet
 
 use_batching = True

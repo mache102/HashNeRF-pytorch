@@ -1,6 +1,6 @@
 """
 Test to retrieve depthmap from a single panorama tile.
-
+python3 -m equirect.generate_data --url "https://www.google.com/maps/@37.3420419,-121.8948427,19.31z?entry=ttu" --file_path imgs/
 python3 -m equirect.generate_data --url "https://www.google.com/maps/@37.4237922,-121.8896494" --file_path imgs/
 """
 import argparse
@@ -94,18 +94,18 @@ class Transform:
         return tl_color, new_depth.reshape(self.h, self.w, 1), mask
 
 def make_coord(h, w):
-    _y = np.repeat(np.array(range(w)).reshape(1,w), h, axis=0)
-    _x = np.repeat(np.array(range(h)).reshape(1,h), w, axis=0).T
+    y = np.repeat(np.array(range(w)).reshape(1,w), h, axis=0)
+    x = np.repeat(np.array(range(h)).reshape(1,h), w, axis=0).T
 
-    _theta = (1 - 2 * (_x) / h) * np.pi/2 # latitude
-    _phi = 2*np.pi*(0.5 - (_y)/w ) # longtitude
+    lat = (1 - 2 * x / h) * np.pi / 2 # theta
+    lon = 2 * np.pi * (0.5 - (y) / w) # phi
 
-    axis0 = (np.cos(_theta)*np.cos(_phi))
-    axis1 = np.sin(_theta)
-    axis2 = (-np.cos(_theta)*np.sin(_phi))
-    coord = np.stack((axis0, axis1, axis2), axis=2)
+    x = np.cos(lat) * np.cos(lon)
+    y = np.cos(lat) * np.sin(lon)
+    z = np.sin(lat)
+    directions = np.stack((x, y, z), axis=2)
 
-    return coord
+    return directions 
 
 class TestPoseGen:
     """
@@ -156,76 +156,94 @@ def main():
     os.makedirs(os.path.join(args.file_path, 'rm_occluded'), exist_ok=True)
     os.makedirs(os.path.join(args.file_path, "test"), exist_ok=True)
 
-    raw_path = os.path.join(args.file_path, "raw")
+    color_path = os.path.join(args.file_path, "color")
     depth_path = os.path.join(args.file_path, "depth")
-
-    panos = sorted(os.listdir(raw_path))
-    depths = sorted(os.listdir(depth_path))
+    panos = sorted([fn for fn in os.listdir(color_path) if fn.startswith("p_")])
+    depths = sorted([fn for fn in os.listdir(depth_path) if fn.startswith("d_")])
     cams = np.loadtxt(os.path.join(args.file_path, "cams.txt"), delimiter=" ")
 
     zoom = 1
     dim = (512 * zoom, 1024 * zoom)
     coord = make_coord(*dim)
+    coord = cv2.resize(coord, (128, 256), interpolation=cv2.INTER_NEAREST)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(coord[:, :, 0], coord[:, :, 1], coord[:, :, 2], s=1)
+    plt.show()
+    exit()
     samples = 10
-    rel_train_pos = make_train_pos(coord, samples) # relative to each pano
-    all_train_pos = [] # relative to origin
+    test_samples = 11
+    # rel_train_pos = make_train_pos(coord, samples) # relative to each pano
+    # all_train_pos = [] # relative to origin
 
     ts = Transform(coord=coord)
 
-    for idx in range(len(panos)): 
-        print(f"[{idx + 1} / {len(panos)}]")
-        num_str = panos[idx].split(".")[0].split("_")[1]
-        num = int(num_str)
-        print(f"pano {num}")
+    # for idx in range(len(panos)): 
+    #     print(f"[{idx + 1} / {len(panos)}]")
+    #     num_str = panos[idx].split(".")[0].split("_")[1]
+    #     num = int(num_str)
+    #     print(f"pano {num}")
 
-        img = cv2.imread(os.path.join(raw_path, panos[idx]), cv2.IMREAD_COLOR)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)     
-        depth = np.load(os.path.join(depth_path, depths[idx]))
-        # replace nan with max 
-        # depth = np.nan_to_num(depth, nan=np.nanmax(depth))
-        # (h, w, 1) -> (h, w, 3) (repeat)
-        depth = np.repeat(depth.reshape(depth.shape[0], depth.shape[1], 1), 3, axis=2)
+    #     img = cv2.imread(os.path.join(color_path, panos[idx]), cv2.IMREAD_COLOR)
+    #     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)     
+    #     depth = np.load(os.path.join(depth_path, depths[idx]))
+    #     # replace nan with max 
+    #     # depth = np.nan_to_num(depth, nan=np.nanmax(depth))
+    #     # (h, w, 1) -> (h, w, 3) (repeat)
+    #     depth = np.repeat(depth.reshape(depth.shape[0], depth.shape[1], 1), 3, axis=2)
+    #     # all depth > 100 set to 0
+    #     depth = np.where(depth > 100, 0, depth)
 
-        cam = cams[num]
-        cam_pos = np.array([cam[0], cam[1]])
+    #     d = depth * coord
+    #     # downscale to 10%
+    #     d = cv2.resize(d, (0, 0), fx=0.1, fy=0.1) 
+    #     d = d.reshape(-1, 3)
+    #     # d plot 3d
+    #     fig = plt.figure()
+    #     ax = fig.add_subplot(111, projection='3d')
+    #     ax.scatter(d[:, 0], d[:, 1], d[:, 2], s=1)
+    #     plt.show()
 
-        train_pos = rel_train_pos.copy()
-        train_pos[:, 0] += cam_pos[0]
-        train_pos[:, 2] += cam_pos[1]
-        all_train_pos.append(train_pos)
+    #     cam = cams[num]
+    #     cam_pos = np.array([cam[0], cam[1]])
 
-        for sample_idx in trange(samples):
-            pose = np.array([0, 0, 10])# rel_train_pos[sample_idx]
-            pose *= -1
+    #     train_pos = rel_train_pos.copy()
+    #     train_pos[:, 0] += cam_pos[0]
+    #     train_pos[:, 2] += cam_pos[1]
+    #     all_train_pos.append(train_pos)
 
-            img1, depth1, _ = ts.translate(img, depth, pose)
-            img2, _, mask = ts.translate(img1, depth1, -pose)
+    #     for sample_idx in trange(samples):
+    #         pose = np.array([0, 0, 10])# rel_train_pos[sample_idx]
+    #         pose *= -1
 
-            plt.subplot(1, 2, 1)
-            plt.imshow(img)
-            plt.subplot(1, 2, 2)
-            plt.imshow(np.uint8(img1))
-            plt.show() 
-            exit() 
+    #         img1, depth1, _ = ts.translate(img, depth, pose)
+    #         img2, _, mask = ts.translate(img1, depth1, -pose)
 
-            fn = f'mask_{num_str}_{str(sample_idx).zfill(4)}.png'
-            fp = os.path.join(args.file_path, 'rm_occluded', fn)
-            Image.fromarray(np.uint8(mask * 255)).save(fp)
+    #         plt.subplot(1, 2, 1)
+    #         plt.imshow(img)
+    #         plt.subplot(1, 2, 2)
+    #         plt.imshow(np.uint8(img1))
+    #         plt.show() 
+    #         exit() 
 
-    # (panos, samples, 3) -> (pano * samples, 3)
-    all_train_pos = reduce(all_train_pos, "p s c -> (p s) c")
-    np.savetxt(os.path.join(args.file_path, 'train_pos.txt'), 
-               all_train_pos, fmt='%f', delimiter=" ")
+    #         fn = f'mask_{num_str}_{str(sample_idx).zfill(4)}.png'
+    #         fp = os.path.join(args.file_path, 'rm_occluded', fn)
+    #         Image.fromarray(np.uint8(mask * 255)).save(fp)
+
+    # # (panos, samples, 3) -> (pano * samples, 3)
+    # all_train_pos = reduce(all_train_pos, "p s c -> (p s) c")
+    # np.savetxt(os.path.join(args.file_path, 'train_pos.txt'), 
+    #            all_train_pos, fmt='%f', delimiter=" ")
     
-    print("Training samples done. Now generating testing samples")
+    # print("Training samples done. Now generating testing samples")
     # testing samples
-    test_samples = 11
-    all_test_pos = TestPoseGen.linear(test_samples, (-10, -10), (10, -10))
+    all_test_pos = TestPoseGen.linear(test_samples, (0, -20), (0, 20))
     np.savetxt(os.path.join(args.file_path, 'test_pos.txt'), 
                all_test_pos, fmt='%f', delimiter=" ")
     
     # use closest to origin to gen test
-    img = cv2.imread(os.path.join(raw_path, panos[0]), cv2.IMREAD_COLOR)
+    img = cv2.imread(os.path.join(color_path, panos[0]), cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)     
     depth = np.load(os.path.join(depth_path, depths[0]))
     # (h, w, 1) -> (h, w, 3) (repeat)
@@ -243,11 +261,11 @@ def main():
         pose *= -1
 
         img1, depth1, _ = ts.translate(img, depth, pose)
-        img2, _, mask = ts.translate(img1, depth1, -pose)
+        # img2, _, mask = ts.translate(img1, depth1, -pose)
         
-        fn = f'mask_{num_str}_{str(sample_idx).zfill(4)}.png'
-        fp = os.path.join(args.file_path, 'rm_occluded', fn)
-        Image.fromarray(np.uint8(mask * 255)).save(fp)
+        fn = f'test_{str(sample_idx).zfill(4)}.png'
+        fp = os.path.join(args.file_path, 'test', fn)
+        Image.fromarray(np.uint8(img1)).save(fp)
 
 if __name__ == '__main__':
     args = parse_args()

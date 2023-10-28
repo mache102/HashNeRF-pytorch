@@ -1,6 +1,6 @@
 expname = blender_paper_ship
-basedir = ./logs
-datadir = ./data/nerf_synthetic/ship
+save_path = ./logs
+data_path = ./data/nerf_synthetic/ship
 dataset_type = blender
 
 

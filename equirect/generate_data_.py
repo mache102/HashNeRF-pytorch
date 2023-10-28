@@ -272,7 +272,7 @@ test_pos = np.array([[-0.05,      0.,       -0.05    ],
                     [ 0.05,      0.,        0.01    ],
                     [ 0.05,      0.,        0.03    ]])
 
-# with open(os.path.join(baseDir, 'test', 'cam_pos.txt'), 'w') as fp:
+# with open(os.path.join(save_path, 'test', 'cam_pos.txt'), 'w') as fp:
 #     for p in test_pos: fp.write('%f %f %f\n' % (p[0], p[1], p[2])) 
 with open(os.path.join(save_path, 'test', 'cam_pos.txt'), 'w') as fp:
     for p in test_pos: 

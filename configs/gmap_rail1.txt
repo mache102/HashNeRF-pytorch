@@ -1,7 +1,7 @@
 # filtered out fake visible pixels
 expname = gmap_rail1
-basedir = ./logs
-datadir = ./data/gmap_rail1
+save_path = ./logs
+data_path = ./data/gmap_rail1
 
 train_bsz = 1400
 N_coarse = 64

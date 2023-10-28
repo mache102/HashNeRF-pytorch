@@ -1,7 +1,7 @@
 # filtered out fake visible pixels
 expname = 03122_554516
-basedir = ./logs
-datadir = ./data/03122_554516
+save_path = ./logs
+data_path = ./data/03122_554516
 dataset_type = equirect
 
 train_bsz = 1400

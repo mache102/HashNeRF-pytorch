@@ -1,6 +1,6 @@
 expname = trex_test
-basedir = ./logs
-datadir = ./data/nerf_llff_data/trex
+save_path = ./logs
+data_path = ./data/nerf_llff_data/trex
 dataset_type = llff
 
 factor = 8

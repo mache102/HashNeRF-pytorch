@@ -1,6 +1,6 @@
 expname = blender_paper_drums
-basedir = ./logs
-datadir = ./data/nerf_synthetic/drums
+save_path = ./logs
+data_path = ./data/nerf_synthetic/drums
 dataset_type = blender
 
 use_viewdirs = True
