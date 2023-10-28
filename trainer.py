@@ -12,26 +12,26 @@ from renderer import VolumetricRenderer
 from util.util import all_to_tensor, save_imgs, shuffle_rays
 from util.math import to_8b, img2mse, mse2psnr
 
-
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class Trainer():
-    def __init__(self, dataset: EquirectDataset, models: dict, 
-                 optimizer: torch.optim.Optimizer,
-                 embedders: dict, usage: dict, 
-                 args: argparse.Namespace):
+    def __init__(self, rays_train, rays_test, cc,
+                 embedders, models, optimizer,
+                 usage, args):
 
-        self.args = args
+        # dataset rays (& camera config)
+        self.rays_train = shuffle_rays(all_to_tensor(rays_train, device))
+        self.rays_test = all_to_tensor(rays_test, device)
+        self.cc = cc
+
+        # embedder, model, optim
+        self.embedders = embedders
         self.models = models
         self.optimizer = optimizer
-        self.embedders = embedders
+
+        # others
         self.usage = usage
-
-        self.unpack_dataset(dataset)
-        self.volren = VolumetricRenderer(models=models,
-                                         embedders=embedders,
-                                         usage=usage, args=args)
-
+        self.args = args
         self.savepath = args.savepath
         self.train_bsz = args.train_bsz
         self.global_step = args.global_step # curr step
@@ -45,22 +45,19 @@ class Trainer():
         # then we shuffle the dataset and reset this to 0
         self.next_batch_idx = 0 
 
-        # constant
+        # constant lr decay rate
         self.decay_rate = 0.1
 
-    def unpack_dataset(self, dataset):
-        """
-        unpack train&test rays, bbox, and camera config
-        """
-        self.cc = dataset.cc
-        self.rays_train = shuffle_rays(all_to_tensor(dataset.rays_train, device))
-        self.rays_test = all_to_tensor(dataset.rays_test, device)
-        self.bbox = dataset.bbox
+        # renderer
+        self.volren = \
+            VolumetricRenderer(
+                models=models,             
+                embedders=embedders,
+                usage=usage, args=args
+            )
 
     def fit(self):
-        """
-        Training loop
-        """
+        """Training loop"""
         print(f"Training iterations {self.start} to {self.end}")
 
         for iteration in trange(self.start, self.end):

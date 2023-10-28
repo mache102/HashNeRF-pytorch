@@ -6,7 +6,7 @@ import pdb
 import traceback 
 
 from radam import RAdam
-from load_data import load
+from load_data import load_equirect_data
 from embedders import get_embedders
 from networks import get_networks
 from util.util import create_expname, save_configs
@@ -21,7 +21,6 @@ def main():
     """
     Main NeRF pipeline    
     """
-
     if args.N_fine > 0:
         print("=== Using fine model ===")
     if args.render_only:
@@ -31,8 +30,16 @@ def main():
     1. Load dataset
     """
     print("Load data")
-    dataset = load(args)
-    args.bbox = dataset.bbox
+    rays_train, rays_test, cc = \
+        load_equirect_data(path=args.data_path,
+                           img_shape=args.img_shape,
+                           n_test_imgs=args.n_test_imgs,
+                           seed=args.seed)
+
+    bbox = (torch.tensor([-1.5, -1.5, -1.0]), 
+            torch.tensor([1.5, 1.5, 1.0]))
+    args.bbox = bbox # throw this in args for now 
+
     """
     2. Experiment savepath, savename, etc.
     """
@@ -56,7 +63,7 @@ def main():
         print(f"Loaded embed config {args.embed_config}")
 
     # some embedders are trainable so we add them to a model dict in advance
-    embedders = get_embedders(embedder_config, dataset)
+    embedders = get_embedders(embedder_config, args.bbox)
     input_chs = {}
     for k in embedders:
         if embedders[k] is None:
@@ -152,9 +159,9 @@ def main():
     """
     7. Create trainer
     """
-    trainer = Trainer(dataset=dataset, models=models, 
-                      optimizer=optimizer, embedders=embedders, 
-                      usage=usage, args=args)
+    trainer = Trainer(rays_train, rays_test, cc,
+                        embedders, models, optimizer,
+                        usage, args)
 
     if args.render_only:
         render_only(trainer)
@@ -191,3 +198,7 @@ if __name__ == '__main__':
     except Exception as e:
         traceback.print_exc()
         pdb.post_mortem()
+
+
+# cli command to git add all files in the equirect/ directory
+# git add $(git ls-files | grep equirect/)

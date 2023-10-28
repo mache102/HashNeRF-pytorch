@@ -2,7 +2,7 @@ import configargparse
 
 def config_parser():
     parser = configargparse.ArgumentParser()
-    
+
     # general options
     parser.add_argument('--config', is_config_file=True,
                         help='config file path')
@@ -12,13 +12,19 @@ def config_parser():
                         help='where to store ckpts and logs')
     parser.add_argument("--data_path", type=str, default='./data/llff/fern',
                         help='input data directory')
+    parser.add_argument("--seed", type=int, default=None,
+                        help='random seed')
+    
+    # dataset 
+    parser.add_argument("--img_shape", type=int, nargs="+", default=[],
+                        help='reshape all imgs to this size (H, W)')
+
+    # component config (embedder, model, optimizer, etc.)
     parser.add_argument("--embed_config", type=str, default="positional",
                         help="filename of embedders config")
     parser.add_argument('--model_config', type=str, default="vanilla_nerf",
                         help='model config name')
-    parser.add_argument("--seed", type=int, default=None,
-                        help='random seed')
-
+    
     # training options
     parser.add_argument("--train_iters", type=int, default=200000,
                         help="number of iterations to train")

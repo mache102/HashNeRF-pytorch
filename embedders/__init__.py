@@ -4,7 +4,7 @@ from .positional_encoder import PosEmbedder
 from .hash_embedder import HashEmbedder 
 from .spherical_harmonic import SHEncoder
 
-def get_embedders(embedder_config, dataset):
+def get_embedders(embedder_config, bbox):
     embedder_names = ["xyz", "dir", "appearance", "transient"]
     embedders = {}
 
@@ -18,7 +18,7 @@ def get_embedders(embedder_config, dataset):
             print(f"{k.upper()} embedder: None")
             continue
 
-        embedders[k], is_trainable[k] = get_embedder(embedder_config[k], bbox=dataset.bbox)
+        embedders[k], is_trainable[k] = get_embedder(embedder_config[k], bbox=bbox)
         print(f"{k.upper()} embedder: {embedder_config[k]['type']}")
         if is_trainable[k]: 
             print("Embedder is trainable")

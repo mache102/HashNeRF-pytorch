@@ -70,9 +70,33 @@ def make_direction_rays(h, w):
     directions = np.stack((x, y, z), axis=2) # (h, w, 3)
     return directions 
 
-def load_equirect_data(path: str, shape: Tuple[int, int], 
+
+def load_equirect_data(path: str, img_shape: Tuple[int, int], 
                        n_test_imgs: int = 10, seed: int = 0):
-    h, w = shape
+    """Load equirect data"""  
+    def load_set(rays, idxs):
+        """Load training or testing set"""
+        for idx in trange(len(idxs)):
+            fn = img_fns[idxs[idx]]
+            origin = cams[idxs[idx]] # ray origin / cam pos
+
+            # rgb image
+            img = cv2.imread(os.path.join(color_path, fn), cv2.IMREAD_COLOR)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            if img.shape[0] != h or img.shape[1] != w:
+                img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
+            img = img.reshape(-1, 3)
+
+            # gradient from rgb image's laplacian
+            gradient = cv2.Laplacian(img, cv2.CV_64F)
+            gradient = 2 * (gradient - np.min(gradient)) / np.ptp(gradient) - 1
+                    
+            rays.origin.append(np.repeat(origin.reshape(1, -1), h * w, axis=0))
+            rays.color.append(img) 
+            rays.gradient.append(gradient)
+            return rays 
+        
+    h, w = img_shape
     rays_train = RayBundle()
     rays_test = RayBundle()
 
@@ -109,48 +133,20 @@ def load_equirect_data(path: str, shape: Tuple[int, int],
     rays_test.embed = np.concatenate([i * np.ones((h*w, 1)) for i in range(n_test_imgs)], axis=0)
 
     print("Loading training data")
-    for idx in trange(len(train_idxs)):
-        fn = img_fns[train_idxs[idx]]
-        origin = cams[train_idxs[idx]] # ray origin / cam pos
-
-        # rgb image
-        img = cv2.imread(os.path.join(color_path, fn), cv2.IMREAD_COLOR)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        if img.shape[0] != h or img.shape[1] != w:
-            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
-        img = img.reshape(-1, 3)
-
-        # gradient from rgb image's laplacian
-        gradient = cv2.Laplacian(img, cv2.CV_64F)
-        gradient = 2 * (gradient - np.min(gradient)) / np.ptp(gradient) - 1
-                
-        rays_train.origin.append(np.repeat(origin.reshape(1, -1), h * w, axis=0))
-        rays_train.color.append(img) 
-        rays_train.gradient.append(gradient)
+    rays_train = load_set(rays_train, train_idxs)
+    rays_train = concat_all(rays_train)
 
     print("Loading testing data")
-    for idx in trange(len(test_idxs)):
-        fn = img_fns[test_idxs[idx]]
-        origin = cams[test_idxs[idx]] # ray origin / cam pos
-
-        # rgb image
-        img = cv2.imread(os.path.join(color_path, fn), cv2.IMREAD_COLOR)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        if img.shape[0] != h or img.shape[1] != w:
-            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
-        img = img.reshape(-1, 3)
-
-        # gradient from rgb image's laplacian
-        gradient = cv2.Laplacian(img, cv2.CV_64F)
-        gradient = 2 * (gradient - np.min(gradient)) / np.ptp(gradient) - 1
-                
-        rays_test.origin.append(np.repeat(origin.reshape(1, -1), h * w, axis=0))
-        rays_test.color.append(img) 
-        rays_test.gradient.append(gradient)
-
-    rays_train = concat_all(rays_train)
+    rays_test = load_set(rays_test, test_idxs)
     rays_test = concat_all(rays_test)
-    return rays_train, rays_test, h, w
+    # end load data
+
+    near, far = 0.0, 2.0
+    cc = CameraConfig(height=h, width=w, near=near, far=far)
+
+    print("Loaded data, camera config:")
+    print(cc)
+    return rays_train, rays_test, cc
 
 def load_equirect_data_(save_path: str, stage=0):
 
@@ -279,7 +275,7 @@ def load_equirect_data_(save_path: str, stage=0):
     return rays_train, rays_test, H, W
 
 
-def load(args):
+def load_(args):
     """
     origin, direction, color, gradient, embed: (h * w * n_train_imgs, 3)
     """
